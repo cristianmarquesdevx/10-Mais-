@@ -36,7 +36,7 @@ desenvolvimento (qualquer celular/4 dígitos), sem auth real.
 ```bash
 flutter pub get
 dart analyze        # 0 issues
-flutter test        # 18 testes
+flutter test        # 34 testes
 flutter build web
 flutter build apk --debug --dart-define=API_BASE=http://10.0.2.2:8787
 ```

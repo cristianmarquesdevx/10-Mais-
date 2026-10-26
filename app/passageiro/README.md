@@ -38,7 +38,7 @@ código de 4 dígitos entram. A demo não tem auth real.
 ```bash
 flutter pub get
 dart analyze        # 0 issues
-flutter test        # 24 testes
+flutter test        # 35 testes
 flutter build web   # build de produção web
 flutter build apk --debug --dart-define=API_BASE=http://10.0.2.2:8787
 ```
