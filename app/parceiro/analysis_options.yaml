@@ -1,0 +1,12 @@
+# Regras idênticas ao app passageiro (mesmo guia de marca e mesmas lints).
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - build/**
+    - web/**
+    - windows/**
+    - android/**
+
+linter:
+  rules: {}

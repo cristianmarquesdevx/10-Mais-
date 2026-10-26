@@ -1,0 +1,75 @@
+name: e2e-emulator
+
+# Fluxo completo passageiro ↔ parceiro nos dois APKs, conduzido por adb +
+# uiautomator (scripts/e2e_emulator.py). É um teste de UI de ponta a ponta e
+# pesado (~15 min, emulador + dois builds), por isso roda sob demanda: disparar
+# pela aba Actions quando mudar algo que afete o fluxo.
+#
+# O processo é o mesmo do host: API de demo na porta 8790 do runner (o emulador
+# a alcança em 10.0.2.2), APKs debug compilados com `--dart-define=API_BASE`,
+# uiautomator conduzindo as duas UIs. As evidências de cada tentativa
+# (screenshots, logcat, result.json) sobem mesmo em falha.
+on:
+  workflow_dispatch:
+
+jobs:
+  fluxo-passageiro-parceiro:
+    # Imagem fixa (não `ubuntu-latest`): o label rola sozinho e um boot de
+    # emulador que passou ontem precisa passar hoje pelo mesmo motivo.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # O APK carrega API_BASE em tempo de build: a API de demo roda no host e
+      # o emulador a enxerga em 10.0.2.2 (porta padrão do script).
+      - name: Build APK passageiro
+        working-directory: app/passageiro
+        run: |
+          flutter pub get
+          flutter build apk --debug --dart-define=API_BASE=http://10.0.2.2:8790
+
+      - name: Build APK parceiro
+        working-directory: app/parceiro
+        run: |
+          flutter pub get
+          flutter build apk --debug --dart-define=API_BASE=http://10.0.2.2:8790
+
+      - name: Habilitar KVM (aceleração do emulador)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # O runner da action cuida do AVD: o script recebe --no-emulator e usa o
+      # dispositivo já conectado. Build e instalação ficam por conta dele.
+      - name: E2E passageiro ↔ parceiro
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: >-
+            -no-window -no-snapshot -noaudio -no-boot-anim
+            -gpu swiftshader -camera-back none -camera-front none
+          disable-animations: true
+          # O serial vem do próprio runner da action (porta pode variar):
+          # o script não sobe outro AVD e usa o dispositivo já conectado.
+          script: |
+            python3 scripts/e2e_emulator.py --no-emulator --skip-build \
+              --serial "${ANDROID_SERIAL:-emulator-5554}"
+
+      - name: Guardar evidências
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-emulator
+          path: .preview/e2e_auto/
+          retention-days: 7

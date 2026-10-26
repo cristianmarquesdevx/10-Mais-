@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# Fins de linha
+# O projeto é editado no Windows (core.autocrlf=true), mas CI, Docker e o
+# container do `ci_db_suite.sh` rodam em Linux. Sem esta regra, um clone
+# escreveria CRLF nos scripts e o `bash` do container falharia em
+# `#!/usr/bin/env bash\r`. Tudo que é texto fica LF nas duas pontas.
+# ---------------------------------------------------------------------------
+* text=auto eol=lf
+
+*.sh        text eol=lf
+*.py        text eol=lf
+*.sql       text eol=lf
+*.dart      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.md        text eol=lf
+*.json      text eol=lf
+*.ts        text eol=lf
+*.kts       text eol=lf
+*.gradle    text eol=lf
+*.toml      text eol=lf
+
+# ---------------------------------------------------------------------------
+# Binários — nunca normalizar, nunca tentar diff de texto.
+# ---------------------------------------------------------------------------
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.webp      binary
+*.gif       binary
+*.ico       binary
+*.ttf       binary
+*.otf       binary
+*.woff      binary
+*.woff2     binary
+*.apk       binary
+*.aab       binary
+*.jar       binary
+*.zip       binary
+*.mp4       binary
+*.webm      binary
+*.mp3       binary
+*.m4a       binary

@@ -1,0 +1,57 @@
+name: db-suite
+
+# Cadeia SQL da Fase 2 (0001→0005) a cada push/PR: container PostGIS limpo,
+# ON_ERROR_STOP em toda a cadeia, E2E dos 2 modos com ledger Σ=0 e suíte
+# adversarial (18/18 asserts). Ver scripts/ci_db_suite.sh.
+on:
+  push:
+  pull_request:
+
+jobs:
+  db-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cadeia SQL 0001→0005 (container + asserts)
+        run: bash scripts/ci_db_suite.sh
+      - name: Simulador de despacho (regressão do modelo de custo)
+        run: python3 scripts/dispatch_sim.py --rides 5000 --seed 42
+
+  app-passageiro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: pub get
+        working-directory: app/passageiro
+        run: flutter pub get
+      - name: dart analyze (0 issues)
+        working-directory: app/passageiro
+        run: dart analyze
+      - name: flutter test (contrato + fluxos C1-C11)
+        working-directory: app/passageiro
+        run: flutter test
+
+  app-parceiro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: pub get
+        working-directory: app/parceiro
+        run: flutter pub get
+      - name: dart analyze (0 issues)
+        working-directory: app/parceiro
+        run: dart analyze
+      - name: flutter test (contrato + fluxos P1-P7)
+        working-directory: app/parceiro
+        run: flutter test

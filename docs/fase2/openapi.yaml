@@ -1,0 +1,1155 @@
+openapi: 3.0.3
+info:
+  title: 10 é + API
+  version: 1.0.0
+  description: |
+    Contract for the Edge Functions of "10 é +" (dezemais) — MVP-A (rides).
+    All endpoints are served by Supabase Edge Functions under /functions/v1/v1.
+    Authentication: Supabase JWT (Authorization: Bearer <access_token>); the
+    caller's uid comes from the token (never from the body). Role is derived
+    server-side (RLS + domain functions).
+    Money amounts are BRL with 2 decimals. All timestamps are RFC3339 UTC.
+    Mutating endpoints require an `Idempotency-Key` header (UUID); replays with
+    the same key return the original result (200) without side effects.
+servers:
+  - url: http://127.0.0.1:54321/functions/v1/v1      # local (supabase start)
+  - url: https://<project-ref>.supabase.co/functions/v1/v1  # hosted
+security:
+  - supabaseAuth: []
+paths:
+  /me:
+    get:
+      summary: Current user profile, role and (if partner) mode + pass status
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+
+  /me/profile:
+    put:
+      summary: Update the passenger profile (partial)
+      description: >
+        Only the fields present are changed. birth_date accepts an ISO date
+        (`YYYY-MM-DD`) or a full ISO-8601 date-time string. Used by C10.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfileUpdate' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /me/profile/photo:
+    post:
+      summary: Update the profile photo
+      description: >
+        Demo receives the image inline as base64. Production stores it in a
+        private bucket and returns a signed URL in `photo_url`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfilePhotoUpdate' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /quote:
+    get:
+      summary: Price of the moment (dynamic tariff) for a route — shown before requesting a ride
+      description: >-
+        Server-side pricing snapshot (SPECS: o motor de preço é do servidor).
+        The value can change at any time (demand/rush); expires_in tells how
+        long the quote is honored. The passenger sees this value before
+        confirming and it is snapshotted as Ride.fare_total on creation.
+      parameters:
+        - { name: origin_lat, in: query, required: true, schema: { type: number } }
+        - { name: origin_lon, in: query, required: true, schema: { type: number } }
+        - { name: dest_lat, in: query, required: true, schema: { type: number } }
+        - { name: dest_lon, in: query, required: true, schema: { type: number } }
+      responses:
+        '200':
+          description: Quote of the moment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Quote' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /rides:
+    get:
+      summary: My ride history (passenger) — cursor-paginated; also 'active=1' for the current ride
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 50 } }
+        - { name: before, in: query, schema: { type: string }, description: cursor (created_at of last item) }
+        - { name: active, in: query, schema: { type: boolean }, description: only the open ride if true }
+      responses:
+        '200':
+          description: Newest-first list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rides]
+                properties:
+                  rides: { type: array, items: { $ref: '#/components/schemas/Ride' } }
+    post:
+      summary: Request a ride (tariff) or open a negotiation (proposed price)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RideRequest' }
+      responses:
+        '201': { description: Ride created (status BUSCANDO) }
+        '400': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # active_ride_exists
+        '422': { $ref: '#/components/responses/Problem' }   # invalid pricing/floor
+  /rides/{rideId}:
+    get:
+      summary: Full ride state (status, ETA, partner card, payments) — poll fallback
+      parameters: [{ $ref: '#/components/parameters/RideId' }]
+      responses:
+        '200': { description: Current state }
+        '404': { $ref: '#/components/responses/Problem' }
+  /rides/{rideId}/cancel:
+    post:
+      summary: Cancel with reason (fault rules applied server-side, R9)
+      parameters:
+        - $ref: '#/components/parameters/RideId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, enum: [PASSENGER_REGRET, NO_SHOW, APP_FAILURE, EMERGENCY, ETA_TOO_HIGH, SUPPORT] }
+      responses:
+        '200': { description: Cancelled }
+        '409': { $ref: '#/components/responses/Problem' }   # ride_already_closed
+  /rides/{rideId}/negotiation:
+    post:
+      summary: Propose or counter an offer (D2); floor/ceiling enforced by city config
+      parameters:
+        - $ref: '#/components/parameters/RideId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, kind]
+              properties:
+                amount: { type: number, format: float }
+                kind: { type: string, enum: [PROPOSE, COUNTER] }
+      responses:
+        '201': { description: Round created with 60s expiry }
+        '422': { $ref: '#/components/responses/Problem' }   # below_floor / above_ceiling / rate_limited
+  /rides/{rideId}/share:
+    post:
+      summary: Create expiring read-only tracking link (safety)
+      parameters: [{ $ref: '#/components/parameters/RideId' }]
+      responses:
+        '201': { description: 'Returns { url, expires_at }' }
+
+  /rides/{rideId}/rating:
+    post:
+      summary: Rate a finished ride (C8); one rating per participant, FINALIZADA only
+      parameters: [{ $ref: '#/components/parameters/RideId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stars]
+              properties:
+                stars: { type: integer, minimum: 1, maximum: 5 }
+                comment: { type: string, maxLength: 500 }
+      responses:
+        '201': { description: Stored }
+        '409': { $ref: '#/components/responses/Problem' }   # ride_not_finished / already_rated
+
+  /heatmap:
+    get:
+      summary: Demand heat by zone ("calor de chamadas") for map overlays
+      responses:
+        '200':
+          description: Zones around the service area with normalized weight 0..1
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [zones]
+                properties:
+                  generated_at: { type: string, format: date-time }
+                  zones:
+                    type: array
+                    items:
+                      type: object
+                      required: [lat, lon, weight]
+                      properties:
+                        lat: { type: number }
+                        lon: { type: number }
+                        weight: { type: number, minimum: 0, maximum: 1 }
+                        label: { type: string }
+                        calls_last_hour: { type: integer, minimum: 0 }
+
+  /partners/nearby:
+    get:
+      summary: Approximate online partners around a point (passenger radar)
+      description: >
+        Positions are deliberately approximate (no exact address) to protect
+        the partner's privacy. Used by the passenger queue/radar view.
+      parameters:
+        - { name: lat, in: query, required: true, schema: { type: number, minimum: -90, maximum: 90 } }
+        - { name: lon, in: query, required: true, schema: { type: number, minimum: -180, maximum: 180 } }
+        - { name: radius_km, in: query, schema: { type: number, default: 5, minimum: 0.5, maximum: 20 } }
+      responses:
+        '200':
+          description: Nearby partner markers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [drivers]
+                properties:
+                  drivers:
+                    type: array
+                    items: { $ref: '#/components/schemas/NearbyDriver' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /rides/{rideId}/recordings:
+    get:
+      summary: List safety recordings (audio/video) attached to the ride
+      parameters: [{ $ref: '#/components/parameters/RideId' }]
+      responses:
+        '200':
+          description: Newest first; access is audited (safety)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recordings]
+                properties:
+                  recordings: { type: array, items: { $ref: '#/components/schemas/Recording' } }
+    post:
+      summary: Upload a safety recording (passenger audio / partner video)
+      description: >
+        Passenger records ride audio; partner may optionally record video
+        choosing front or rear camera. Media goes to private storage —
+        never public URLs.
+      parameters:
+        - { $ref: '#/components/parameters/RideId' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, duration_ms, size_bytes, mime]
+              properties:
+                kind: { type: string, enum: [AUDIO, VIDEO] }
+                camera: { type: string, enum: [FRONT, REAR], description: VIDEO only }
+                duration_ms: { type: integer, minimum: 1 }
+                size_bytes: { type: integer, minimum: 1, maximum: 15728640 }
+                mime: { type: string, example: audio/webm }
+                data_b64: { type: string, description: 'media bytes, base64 (demo only)' }
+      responses:
+        '201':
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Recording' }
+        '404': { $ref: '#/components/responses/Problem' }   # ride_not_found
+        '422': { $ref: '#/components/responses/Problem' }   # invalid_recording
+
+  /offers/mine:
+    get:
+      summary: Open offers for the authenticated partner (pull fallback)
+      responses:
+        '200':
+          description: SENT offers with server-side countdown
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [offers]
+                properties:
+                  offers: { type: array, items: { $ref: '#/components/schemas/Offer' } }
+  /offers/{offerId}/accept:
+    post:
+      summary: Accept an offer (atomic; first-accept wins)
+      parameters:
+        - { name: offerId, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Ride accepted (snapshot captured) }
+        '409': { $ref: '#/components/responses/Problem' }   # offer_unavailable
+  /offers/{offerId}/decline:
+    post:
+      summary: Decline (soft penalty accounting only) — returns what the partner lost
+      parameters: [{ name: offerId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200':
+          description: Declined; the app shows the consequence from this payload
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [loss]
+                properties:
+                  loss: { $ref: '#/components/schemas/OfferLoss' }
+        '409': { $ref: '#/components/responses/Problem' }   # offer_unavailable
+  /offers/{offerId}:
+    get:
+      summary: Closed offer outcome (why it left the queue) — used when the 15 s timer expires
+      parameters: [{ name: offerId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200':
+          description: Offer status (SENT/DECLINED/EXPIRED/ACCEPTED) and its loss block
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [offer_id, ride_id, status]
+                properties:
+                  offer_id: { type: string, format: uuid }
+                  ride_id: { type: string, format: uuid }
+                  status: { type: string, enum: [SENT, DECLINED, EXPIRED, ACCEPTED] }
+                  loss: { $ref: '#/components/schemas/OfferLoss' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /partner/online:
+    post:
+      summary: 'Go online (activates scheduled pass, A2); body: { lat, lon, accuracy }'
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '200':
+          description: Online (activates scheduled pass if any)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode]
+                properties:
+                  mode: { type: string, enum: [PASSE_ATIVO, COMISSAO] }
+                  pass_expires_at: { type: string, format: date-time, nullable: true }
+        '403': { $ref: '#/components/responses/Problem' }   # kyc not approved / blocked
+  /partner/offline:
+    post: { summary: Go offline, responses: { '200': { description: Ok } } }
+  /partner/heartbeat:
+    post:
+      summary: Position batch (offline-tolerant); server is the clock (A7)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [points]
+              properties:
+                points:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [ts, lat, lon]
+                    properties:
+                      ts: { type: string, format: date-time }
+                      lat: { type: number }
+                      lon: { type: number }
+                      speed_mps: { type: number }
+                      accuracy_m: { type: number }
+                      ride_id: { type: string, format: uuid }
+      responses:
+        '200': { description: Accepted (queued offline on device when offline) }
+  /partner/break/start:
+    post:
+      summary: Start an operational break (offers paused)
+      description: >
+        The server owns the break clock (A7). Offers stop immediately and the
+        break expires automatically; the maximum is 3 hours.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [minutes]
+              properties:
+                minutes: { type: integer, minimum: 1, maximum: 180, default: 180 }
+      responses:
+        '200':
+          description: Break started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartnerBreak' }
+        '409': { $ref: '#/components/responses/Problem' }   # em_corrida
+
+  /partner/break/end:
+    post:
+      summary: End an operational break early and go back online
+      responses:
+        '200': { description: Break ended }
+
+  /partner/preferences:
+    get:
+      summary: Service types the partner accepts
+      description: >
+        Powers the partner app's "Configurar solicitações" screen. The server
+        only creates offers for enabled types; at least one must stay enabled.
+      responses:
+        '200':
+          description: Current preferences
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartnerPreferences' }
+    put:
+      summary: Replace the accepted service types
+      description: >
+        Server-side filter for new offers (MOTO = tariff ride, MOTO_NEGOCIA =
+        negotiated price). Unknown values are ignored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartnerPreferences' }
+      responses:
+        '200':
+          description: Preferences saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartnerPreferences' }
+        '422': { $ref: '#/components/responses/Problem' }   # invalid_services
+
+  /partner/performance:
+    get:
+      summary: Weekly performance of the signed-in partner
+      description: >
+        Seven days ending today, counted in the market timezone
+        (America/Porto_Velho, UTC-4) — "today" on the driver's screen must be
+        the driver's day, not the UTC day. Every number comes from events the
+        server actually observed: offers sent, accepts, declines and timeouts,
+        connected time credited between presence updates and heartbeats, the
+        partner's position in the ranked queue of each dispatch (won or not)
+        and the ratings received. A field with no event in the window is null:
+        the app shows "sem dados" instead of an invented 0%.
+      responses:
+        '200':
+          description: Daily series + window totals
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartnerPerformance' }
+
+  /partner/transitions:
+    post:
+      summary: Ride phase transitions (arrive/start/finish) — only via this endpoint
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ride_id, to]
+              properties:
+                ride_id: { type: string, format: uuid }
+                to: { type: string, enum: [A_CAMINHO, CHEGOU, EM_VIAGEM, FINALIZADA] }
+                fare_total: { type: number }   # required when to=FINALIZADA
+                cash_declared: { type: boolean }  # CASH confirmation (ADR-003)
+      responses:
+        '200': { description: Transition applied }
+        '409': { $ref: '#/components/responses/Problem' }   # illegal_transition
+
+  /partner/passes:
+    get:
+      summary: Current pass, FIFO queue and hours ledger
+      responses:
+        '200':
+          description: Ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartnerPassState' }
+    post:
+      summary: Buy a pass (PIX/card via hosted checkout) -> PENDING_PAYMENT
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '201':
+          description: Pass purchase created (activates on confirmed payment, A2/A6)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pass_id, checkout]
+                properties:
+                  pass_id: { type: string, format: uuid }
+                  checkout:
+                    type: object
+                    properties:
+                      pix: { type: string, description: copia-cola PIX }
+                      card_url: { type: string, format: uri }
+        '409': { $ref: '#/components/responses/Problem' }   # purchase_in_flight
+  /partner/wallet:
+    get:
+      summary: Balance, debt and itemized statement (ledger)
+      responses:
+        '200':
+          description: Ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartnerWallet' }
+  /partner/wallet/withdraw:
+    post:
+      summary: Withdraw available balance via PIX
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '202': { description: Withdrawal queued }
+        '409': { $ref: '#/components/responses/Problem' }   # insufficient / debt
+
+  /invites/mine:
+    get:
+      summary: Invite codes generated by the authenticated account
+      responses:
+        '200':
+          description: Newest first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InviteList' }
+  /invites:
+    post:
+      summary: Generate a new driver invite code
+      description: >
+        The invited driver earns the configured reward hours after completing
+        the first ride; the code is shareable as text.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Invite created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invite' }
+
+  /scratch/campaigns:
+    get:
+      summary: Active scratch-card campaigns
+      responses:
+        '200':
+          description: Ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [campaigns]
+                properties:
+                  campaigns:
+                    type: array
+                    items: { $ref: '#/components/schemas/ScratchCampaign' }
+  /scratch/play:
+    post:
+      summary: Issue a scratch ticket for a campaign
+      description: >
+        The server draws the result. The demo returns the full ticket here;
+        production should only reveal `result`/`prize_id` after the minimum
+        scratch threshold in GET /scratch/tickets/{ticketId}/result.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [campaign_id]
+              properties:
+                campaign_id: { type: string, example: scratch-001 }
+      responses:
+        '200':
+          description: Ticket issued (status ISSUED)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScratchTicket' }
+        '404': { $ref: '#/components/responses/Problem' }   # campaign_not_found
+        '409': { $ref: '#/components/responses/Problem' }   # max_participations
+  /scratch/tickets/{ticketId}/result:
+    get:
+      summary: Reveal the scratch ticket result after the minimum threshold
+      description: >
+        The server already drew the result. This call marks the ticket as
+        SCRATCHED and records scratched_at; it is idempotent for an already
+        scratched ticket. The demo performs this transition on GET; production
+        must move it to a POST if the client can call it directly.
+      parameters:
+        - $ref: '#/components/parameters/ScratchTicketId'
+      responses:
+        '200':
+          description: Ticket with the revealed result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScratchTicket' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /scratch/history:
+    get:
+      summary: Scratch tickets of the authenticated user
+      responses:
+        '200':
+          description: Newest first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScratchTicketList' }
+  /scratch/redeem:
+    post:
+      summary: Redeem a winning scratch ticket
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket_id]
+              properties:
+                ticket_id: { type: string }
+      responses:
+        '200':
+          description: Prize redeemed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScratchRedemption' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # not_redeemable
+
+  /partner/profile:
+    put:
+      summary: Update partner registration and vehicle data
+      description: >
+        Partial update of the partner profile (CNH and vehicle). KYC status
+        is server-controlled and cannot be set here.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartnerProfileUpdate' }
+      responses:
+        '200':
+          description: Updated partner profile
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [partner]
+                properties:
+                  partner: { $ref: '#/components/schemas/PartnerInfo' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /payments/ride:
+    post:
+      summary: Start payment for a finished ride (PIX dynamic QR / hosted card)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ride_id, method]
+              properties:
+                ride_id: { type: string, format: uuid }
+                method: { type: string, enum: [PIX, CARD] }
+      responses:
+        '201': { description: 'Returns { payment_id, pix: { qr, copia_cola, expires_at } } or { card_url }' }
+  /webhooks/psp:
+    post:
+      summary: PSP webhook (signature-verified; idempotent; service-role only)
+      security: []
+      responses:
+        '200': { description: Ack (always 200 after signature validation) }
+
+  /support/tickets:
+    get: { summary: My tickets, responses: { '200': { description: Ok } } }
+    post:
+      summary: Open ticket (EMERGENCY preloads ride + location, SLA 2min)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '201': { description: Created }
+  /support/tickets/{ticketId}/messages:
+    post:
+      summary: Add message/attachment (chat REQ-006)
+      parameters: [{ name: ticketId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '201': { description: Stored }
+
+  /kyc/cases:
+    post:
+      summary: Submit KYC (guided capture already stored; triggers auto-decision)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '201':
+          description: Case created; position = manual-review queue (only when IN_REVIEW)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [case_id, status]
+                properties:
+                  case_id: { type: string, format: uuid }
+                  status: { type: string, enum: [AUTO_APPROVED, IN_REVIEW, REJECTED, RESUBMIT] }
+                  position: { type: integer, nullable: true }
+                  sla: { type: string, format: date-time, nullable: true, description: 'SLA due (manual review, 7h-23h)' }
+  /kyc/cases/{caseId}/documents:
+    post:
+      summary: Upload re-submission for a single rejected document (guided retry)
+      parameters: [{ name: caseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '201': { description: Queued for re-analysis }
+
+components:
+  securitySchemes:
+    supabaseAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+    RideId:
+      name: rideId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ScratchTicketId:
+      name: ticketId
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Problem:
+      description: RFC7807 problem+json with stable machine-readable code
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, example: 'https://api.dezemais.app/errors/offer-unavailable' }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string, example: 'offer_unavailable' }
+        detail: { type: string }
+        trace_id: { type: string }
+    Recording:
+      type: object
+      required: [recording_id, ride_id, kind, duration_ms, size_bytes, mime, created_at]
+      properties:
+        recording_id: { type: string, format: uuid }
+        ride_id: { type: string, format: uuid }
+        kind: { type: string, enum: [AUDIO, VIDEO] }
+        camera: { type: string, enum: [FRONT, REAR] }
+        duration_ms: { type: integer }
+        size_bytes: { type: integer }
+        mime: { type: string }
+        created_at: { type: string, format: date-time }
+    RideRequest:
+      type: object
+      required: [origin, destination, pricing_mode]
+      properties:
+        origin: { $ref: '#/components/schemas/GeoPoint' }
+        destination: { $ref: '#/components/schemas/GeoPoint' }
+        origin_address: { type: string }
+        destination_address: { type: string }
+        pricing_mode: { type: string, enum: [TARIFF, NEGOTIATED] }
+        proposed_amount: { type: number, description: required when NEGOTIATED }
+        quoted_fare:
+          type: number
+          nullable: true
+          description: >-
+            TARIFF snapshot from GET /quote shown to the passenger at request
+            time; snapshotted as Ride.fare_total (server may revalidate
+            against the floor/cap before honoring it).
+        payment_method_id: { type: string, format: uuid }
+    Quote:
+      type: object
+      description: Price of the moment — never cached client-side beyond expires_in
+      required: [fare_total, expires_in]
+      properties:
+        fare_total: { type: number }
+        expires_in: { type: integer, description: seconds the quote is honored }
+        currency: { type: string, enum: [BRL] }
+        breakdown:
+          type: object
+          description: 'human-readable components (REQ-003: cada componente)'
+          properties:
+            distance_km: { type: number }
+            base: { type: number }
+            demand_multiplier: { type: number }
+            rush_multiplier: { type: number }
+    GeoPoint:
+      type: object
+      required: [lat, lon]
+      properties:
+        lat: { type: number }
+        lon: { type: number }
+    Ride:
+      type: object
+      description: Ride state returned by GET /rides and GET /rides/{rideId}
+      required: [ride_id, status]
+      properties:
+        ride_id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [CRIADA, BUSCANDO, OFERTADA, ACEITA, A_CAMINHO, CHEGOU, EM_VIAGEM,
+                 FINALIZADA, FALHA_PAGAMENTO, EXPIRADA,
+                 CANCELADA_CLIENTE, CANCELADA_PARCEIRO, CANCELADA_SISTEMA, CANCELADA_SUPORTE]
+        pricing_mode: { type: string, enum: [PASSE, COMISSAO], nullable: true }
+        fare_total: { type: number, nullable: true }
+        proposed_amount: { type: number, nullable: true }
+        eta_seconds: { type: integer, nullable: true, description: server-computed; never client-derived }
+        distance_km:
+          type: number
+          nullable: true
+          description: >-
+            Distância rodoviária congelada no pedido (a mesma usada pela
+            cotação: base = fixo + por km × distance_km). Oferta
+            (trip_distance_km) e recibo repetem este número.
+        origin: { $ref: '#/components/schemas/GeoPoint' }
+        destination: { $ref: '#/components/schemas/GeoPoint' }
+        origin_address: { type: string }
+        destination_address: { type: string }
+        partner: { type: object, nullable: true, properties: { name: { type: string }, rating: { type: number }, vehicle: { type: string } } }
+        payment_status: { type: string, enum: [NOT_DUE, PENDING, CONFIRMED, FAILED, REFUNDED] }
+        created_at: { type: string, format: date-time }
+    Me:
+      type: object
+      required: [user_id, role]
+      properties:
+        user_id: { type: string, format: uuid }
+        role: { type: string, enum: [PASSENGER, PARTNER, AGENT, ADMIN] }
+        phone_e164: { type: string, nullable: true, example: '+5569999999999' }
+        full_name: { type: string, nullable: true, maxLength: 120 }
+        birth_date:
+          type: string
+          nullable: true
+          description: ISO date or ISO-8601 date-time
+          example: '1990-05-20'
+        weight: { type: number, nullable: true, description: kilograms }
+        height: { type: number, nullable: true, description: metres }
+        photo_url: { type: string, format: uri, nullable: true }
+        partner: { $ref: '#/components/schemas/PartnerInfo' }
+    PartnerInfo:
+      type: object
+      description: Present only when role=PARTNER; also returned by PUT /partner/profile
+      required: [kyc_status, monetization_mode, wallet_balance, debt_cents]
+      properties:
+        kyc_status: { type: string, enum: [NOT_STARTED, IN_REVIEW, APPROVED, REJECTED, RESUBMIT] }
+        monetization_mode: { type: string, enum: [PASSE_ATIVO, COMISSAO] }
+        pass_expires_at: { type: string, format: date-time, nullable: true }
+        wallet_balance: { type: number }
+        debt_cents: { type: integer, minimum: 0 }
+        full_name: { type: string, nullable: true }
+        phone_e164: { type: string, nullable: true }
+        cnh_number: { type: string, nullable: true }
+        cnh_category: { type: string, nullable: true, example: AB }
+        cnh_expiry: { type: string, nullable: true, description: ISO date or date-time }
+        vehicle_plate: { type: string, nullable: true }
+        vehicle_model: { type: string, nullable: true }
+        vehicle_year: { type: string, nullable: true, example: '2022' }
+      additionalProperties: true
+    PartnerPreferences:
+      type: object
+      description: What the partner wants to receive (Configurar solicitações)
+      required: [services]
+      properties:
+        services:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [MOTO, MOTO_NEGOCIA] }
+    Offer:
+      type: object
+      description: Simultaneous offer to a partner (SPECS §1.2); countdown is server-side
+      required: [offer_id, ride_id, amount, timeout_at]
+      properties:
+        offer_id: { type: string, format: uuid }
+        ride_id: { type: string, format: uuid }
+        amount: { type: number, description: gross to the partner (bruto) }
+        pickup_distance_km: { type: number }
+        trip_distance_km: { type: number }
+        destination_area: { type: string, description: 'approximate destination label (privacy: area, not exact)' }
+        service: { type: string, enum: [MOTO, MOTO_NEGOCIA], description: 'what the partner is accepting: tariff ride or negotiated price' }
+        pickup_eta_min: { type: integer, description: 'estimated minutes to the pickup point' }
+        trip_duration_min: { type: integer, description: 'estimated minutes from pickup to drop-off' }
+        price_multiplier: { type: number, nullable: true, description: 'surge applied to the base fare; null for negotiated offers' }
+        origin: { $ref: '#/components/schemas/GeoPoint' }
+        destination: { $ref: '#/components/schemas/GeoPoint' }
+        passenger_name: { type: string, description: 'passenger name only (privacy: no CPF/docs)' }
+        passenger_rating: { type: number, description: 'passenger rating, if available' }
+        dispatch:
+          type: object
+          nullable: true
+          description: 'why THIS partner got the offer (dispatch snapshot, SPECS §1.3) — the app explains it, never recomputes it; null when unavailable'
+          properties:
+            rank: { type: integer, description: 'position in the eligible queue at send time (1 = best)' }
+            pool: { type: integer, description: 'how many partners were eligible when the offer was sent' }
+            score: { type: number, description: 'auditable total score' }
+            components: { type: object, additionalProperties: { type: number }, description: 'score parts: eta, rating, acceptance, idle, experience, route' }
+            online_seconds: { type: integer, description: 'how long the partner has been online (server clock)' }
+            rating: { type: number }
+            rating_count: { type: integer }
+            acceptance_rate: { type: number }
+            vehicle: { type: string }
+        timeout_at: { type: string, format: date-time, description: 'PRM-oferta.timeout (15s); client only counts down, server decides' }
+    OfferLoss:
+      type: object
+      description: 'What the partner lost on a closed offer (SPECS §1.3); the app only displays it — the penalty itself belongs to the server'
+      required: [offer_id, ride_id, reason, lost_amount]
+      properties:
+        offer_id: { type: string, format: uuid }
+        ride_id: { type: string, format: uuid }
+        reason: { type: string, enum: [DECLINED, EXPIRED], description: 'EXPIRED counts as a refusal: ignoring cannot be cheaper than declining' }
+        lost_amount: { type: number, description: 'gross amount frozen in the offer' }
+        pickup_distance_km: { type: number }
+        pickup_eta_min: { type: integer }
+        trip_distance_km: { type: number }
+        trip_duration_min: { type: integer }
+        acceptance_rate_before: { type: number, description: 'acceptance rate before the soft penalty' }
+        acceptance_rate: { type: number, description: 'acceptance rate after the penalty — feeds the dispatch score' }
+        rating: { type: number }
+        timeout_s: { type: integer, description: 'PRM-oferta.timeout applied to this offer' }
+    PartnerPerformance:
+      type: object
+      description: 'Weekly performance (GET /partner/performance); all values are observed events, never estimates'
+      required: [date, week_start, timezone, days, acceptance, online, rating, rank]
+      properties:
+        date: { type: string, description: 'today in the market timezone (YYYY-MM-DD)' }
+        week_start: { type: string, description: 'first day of the 7-day window (YYYY-MM-DD)' }
+        timezone: { type: string, example: America/Porto_Velho }
+        days:
+          type: array
+          description: oldest to today (always 7 entries)
+          items: { $ref: '#/components/schemas/PartnerPerformanceDay' }
+        acceptance:
+          type: object
+          properties:
+            current: { type: number, nullable: true, description: 'acceptance rate the dispatch uses right now' }
+            week: { type: number, nullable: true, description: 'accepted / offers in the window; null without offers' }
+            offers: { type: integer }
+            accepted: { type: integer }
+            declined: { type: integer }
+            expired: { type: integer, description: 'timeouts, counted as refusals' }
+        online:
+          type: object
+          properties:
+            week_seconds: { type: integer, description: 'connected time observed in the window' }
+            today_seconds: { type: integer }
+            session_seconds: { type: integer, description: 'current session, 0 when offline' }
+        rating:
+          type: object
+          properties:
+            value: { type: number, nullable: true, description: 'lifetime average that feeds the dispatch score' }
+            count: { type: integer }
+            week_count: { type: integer, description: 'ratings received in the window' }
+            week_avg: { type: number, nullable: true }
+        rank:
+          type: object
+          description: 'position in the eligible queue on each dispatch the partner was online for'
+          properties:
+            avg: { type: number, nullable: true }
+            best: { type: integer, nullable: true }
+            worst: { type: integer, nullable: true }
+            pool: { type: number, nullable: true, description: 'average queue size of those dispatches' }
+            samples: { type: integer }
+    PartnerPerformanceDay:
+      type: object
+      required: [date, weekday, offers, accepted, declined, expired, online_seconds, rank_samples, ratings]
+      properties:
+        date: { type: string }
+        weekday: { type: string, enum: [seg, ter, qua, qui, sex, sáb, dom] }
+        offers: { type: integer }
+        accepted: { type: integer }
+        declined: { type: integer }
+        expired: { type: integer }
+        acceptance_rate: { type: number, nullable: true, description: 'null when no offer arrived that day' }
+        online_seconds: { type: integer }
+        avg_rank: { type: number, nullable: true }
+        rank_samples: { type: integer }
+        pool: { type: number, nullable: true }
+        ratings: { type: integer }
+        rating_avg: { type: number, nullable: true }
+    PartnerWallet:
+      type: object
+      required: [balance, debt_cents, statement]
+      properties:
+        balance: { type: number, description: available for withdrawal }
+        debt_cents: { type: integer, description: ADR-003 cash-ride debt (blocks only cash rides when over limit) }
+        statement:
+          type: array
+          items:
+            type: object
+            required: [entry_group_id, description, direction, amount, created_at]
+            properties:
+              entry_group_id: { type: string, format: uuid }
+              ride_id: { type: string, format: uuid, nullable: true }
+              pass_id: { type: string, format: uuid, nullable: true }
+              description: { type: string }
+              direction: { type: string, enum: [D, C], description: ledger direction (always itemized per REQ-003) }
+              amount: { type: number }
+              created_at: { type: string, format: date-time }
+    PartnerPassState:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [PASSE_ATIVO, COMISSAO] }
+        active:
+          type: object
+          nullable: true
+          properties:
+            pass_id: { type: string, format: uuid }
+            expires_at: { type: string, format: date-time, description: server wall clock (A7) }
+            counting_strategy: { type: string, enum: [RELOGIO_CORRIDO, HORAS_ONLINE] }
+        queue:
+          type: array
+          description: FIFO of purchased passes starting after the active one (A3)
+          items:
+            type: object
+            properties:
+              pass_id: { type: string, format: uuid }
+              status: { type: string, enum: [PENDING_PAYMENT, SCHEDULED, QUEUED] }
+        price: { type: number, description: city-config price of a new pass }
+    ProfileUpdate:
+      type: object
+      minProperties: 1
+      description: Partial passenger profile update (C10)
+      properties:
+        full_name: { type: string, minLength: 1, maxLength: 120 }
+        birth_date:
+          type: string
+          description: ISO date (`YYYY-MM-DD`) or full ISO-8601 date-time
+          example: '1990-05-20'
+        weight: { type: number, minimum: 20, maximum: 300, description: kilograms }
+        height: { type: number, minimum: 0.5, maximum: 2.5, description: metres }
+    ProfilePhotoUpdate:
+      type: object
+      required: [photo, mime]
+      properties:
+        photo: { type: string, format: byte, description: base64 image bytes (demo) }
+        mime: { type: string, example: image/jpeg }
+    PartnerProfileUpdate:
+      type: object
+      minProperties: 1
+      description: Partial partner registration update (3.7)
+      properties:
+        full_name: { type: string, minLength: 1, maxLength: 120 }
+        phone_e164: { type: string, example: '+5569999999999' }
+        cnh_number: { type: string }
+        cnh_category: { type: string, example: AB }
+        cnh_expiry: { type: string, description: ISO date or date-time }
+        vehicle_plate: { type: string }
+        vehicle_model: { type: string }
+        vehicle_year: { type: string, example: '2022' }
+    Invite:
+      type: object
+      required: [invite_id, invite_code, status, reward_hours, created_at]
+      properties:
+        invite_id: { type: string, format: uuid }
+        invite_code: { type: string, example: 10MAIS-C1D786 }
+        status: { type: string, enum: [PENDING, COMPLETED, EXPIRED] }
+        reward_hours: { type: integer, minimum: 0, example: 12 }
+        created_at: { type: string, format: date-time }
+    InviteList:
+      type: object
+      required: [invites]
+      properties:
+        invites:
+          type: array
+          items: { $ref: '#/components/schemas/Invite' }
+    ScratchCampaign:
+      type: object
+      required: [id, name, status, started_at, max_participations_per_user, participation_type]
+      properties:
+        id: { type: string, example: scratch-001 }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { type: string, enum: [SCHEDULED, ACTIVE, INACTIVE, ENDED] }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time, nullable: true }
+        max_participations_per_user: { type: integer, minimum: 1 }
+        participation_type: { type: string, enum: [FREE, PROMO, ACTION_BASED] }
+    ScratchTicket:
+      type: object
+      required: [id, campaign_id, user_id, result, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        campaign_id: { type: string, example: scratch-001 }
+        user_id: { type: string, format: uuid }
+        prize_id: { type: string, nullable: true }
+        result: { type: string, enum: [WINNER, NON_WINNER] }
+        status: { type: string, enum: [ISSUED, SCRATCHED, REDEEMED, EXPIRED] }
+        scratched_at: { type: string, format: date-time, nullable: true }
+        redeemed_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    ScratchTicketList:
+      type: object
+      required: [tickets]
+      properties:
+        tickets:
+          type: array
+          items: { $ref: '#/components/schemas/ScratchTicket' }
+    ScratchRedemption:
+      type: object
+      required: [id, ticket_id, user_id, redeemed_at, status]
+      properties:
+        id: { type: string, format: uuid }
+        ticket_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        redeemed_at: { type: string, format: date-time }
+        benefit_applied: { type: string, nullable: true, description: prize or benefit applied }
+        status: { type: string, enum: [REDEEMED] }
+    NearbyDriver:
+      type: object
+      required: [driver_id, lat, lon, available]
+      properties:
+        driver_id: { type: string }
+        lat: { type: number }
+        lon: { type: number }
+        distance_km: { type: number, minimum: 0, description: approximate distance to the passenger }
+        available: { type: boolean }
+        vehicle: { type: string, nullable: true, example: Honda Biz 125 }
+    PartnerBreak:
+      type: object
+      required: [started_at, expires_at]
+      properties:
+        started_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: server wall clock (A7) }

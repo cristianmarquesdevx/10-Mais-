@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10 é + · Protótipo Fase 1</title>
+<style>
+  :root{
+    --primary:#0066FF; --primary-dark:#0052CC; --earn:#0A7F45; --warning:#9E5D00;
+    --danger:#C62828; --ink:#0F172A; --muted:#475569; --hairline:#94A3B8;
+    --surface:#FFFFFF; --bg:#F8FAFC; --r:8px; --r-sheet:12px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0; font-family:Roboto,system-ui,sans-serif;}
+  body{background:#e2e8f0; color:var(--ink); display:flex; flex-direction:column; align-items:center; min-height:100vh; padding:16px;}
+  h1{font-size:18px; margin-bottom:4px;}
+  .hint{font-size:13px; color:var(--muted); margin-bottom:12px; text-align:center; max-width:520px;}
+  .controls{display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; justify-content:center;}
+  .controls button{font-size:13px; padding:8px 14px; border:1px solid var(--hairline); background:#fff; border-radius:999px; cursor:pointer;}
+  .controls button.on{background:var(--primary); color:#fff; border-color:var(--primary);}
+  .controls button.warn.on{background:var(--warning); border-color:var(--warning);}
+  .phone{width:390px; height:800px; background:var(--bg); border-radius:28px; border:10px solid #0f172a; overflow:hidden; position:relative; box-shadow:0 12px 40px rgba(15,23,42,.35);}
+  .screen{position:absolute; inset:0; display:none; flex-direction:column;}
+  .screen.active{display:flex;}
+  .map{flex:1; background:
+      linear-gradient(90deg, rgba(148,163,184,.25) 1px, transparent 1px) 0 0/48px 48px,
+      linear-gradient(rgba(148,163,184,.25) 1px, transparent 1px) 0 0/48px 48px,
+      #e8eef5; position:relative;}
+  .map.dark{background:
+      linear-gradient(90deg, rgba(148,163,184,.15) 1px, transparent 1px) 0 0/48px 48px,
+      linear-gradient(rgba(148,163,184,.15) 1px, transparent 1px) 0 0/48px 48px,
+      #1e293b;}
+  .dot{position:absolute; width:18px; height:18px; background:var(--primary); border:3px solid #fff; border-radius:50%; top:45%; left:47%; box-shadow:0 0 0 6px rgba(0,102,255,.25);}
+  .pin{position:absolute; width:14px; height:14px; background:var(--earn); border:3px solid #fff; border-radius:50% 50% 50% 0; transform:rotate(-45deg); top:24%; left:64%;}
+  .route{position:absolute; top:26%; left:49%; width:3px; height:22%; background:var(--primary); border-radius:2px;}
+  .sheet{background:var(--surface); border-radius:var(--r-sheet) var(--r-sheet) 0 0; padding:16px; display:flex; flex-direction:column; gap:12px; box-shadow:0 -6px 24px rgba(15,23,42,.12);}
+  .banner{display:none; background:#9E5D00; color:#fff; font-size:12px; padding:6px 12px; text-align:center;}
+  body.offline .banner{display:block;}
+  .row{display:flex; align-items:center; gap:10px;}
+  .between{justify-content:space-between;}
+  .field{background:var(--bg); border:1px solid var(--hairline); border-radius:var(--r); padding:12px; font-size:15px; color:var(--ink);}
+  .chip{font-size:12px; padding:4px 10px; border-radius:999px; background:#EAF2FF; color:var(--primary-dark); font-weight:600;}
+  .chip.earn{background:#E4F3EA; color:var(--earn);}
+  .chip.warn{background:#FBF0E0; color:var(--warning);}
+  .btn{display:block; width:100%; min-height:48px; border:none; border-radius:var(--r); font-size:16px; font-weight:700; cursor:pointer; padding:12px;}
+  .btn.primary{background:var(--primary); color:#fff;}
+  .btn.primary:active{background:var(--primary-dark);}
+  .btn.earn{background:var(--earn); color:#fff;}
+  .btn.ghost{background:transparent; color:var(--muted); border:1px solid var(--hairline);}
+  .btn.danger{background:var(--danger); color:#fff;}
+  .btn:disabled{opacity:.45; cursor:not-allowed;}
+  .opt{border:2px solid var(--hairline); border-radius:var(--r); padding:12px; cursor:pointer; display:flex; justify-content:space-between; align-items:center;}
+  .opt.sel{border-color:var(--primary); background:#F3F8FF;}
+  .big{font-size:31px; font-weight:800; font-variant-numeric:tabular-nums;}
+  .med{font-size:20px; font-weight:700;}
+  .sm{font-size:13px; color:var(--muted);}
+  .nav{display:flex; background:var(--surface); border-top:1px solid var(--hairline); padding:8px 0 12px;}
+  .nav button{flex:1; background:none; border:none; font-size:12px; color:var(--muted); cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:2px; min-height:48px;}
+  .nav button.sel{color:var(--primary); font-weight:700;}
+  .nav .ico{font-size:20px;}
+  .timeline{display:flex; flex-direction:column; gap:8px; font-size:14px;}
+  .timeline .step{display:flex; gap:8px; align-items:center; color:var(--muted);}
+  .timeline .step.done{color:var(--ink);}
+  .timeline .step::before{content:""; width:10px; height:10px; border-radius:50%; background:var(--hairline); flex:none;}
+  .timeline .step.done::before{background:var(--earn);}
+  .stars{display:flex; gap:8px; justify-content:center; font-size:34px; cursor:pointer;}
+  .stars span{color:var(--hairline);} .stars span.on{color:#F5B301;}
+  .chips{display:flex; gap:8px; flex-wrap:wrap;}
+  .chips span{font-size:13px; border:1px solid var(--hairline); border-radius:999px; padding:6px 12px; cursor:pointer;}
+  .chips span.on{background:var(--primary); color:#fff; border-color:var(--primary);}
+  .offer{border:1px solid var(--hairline); border-radius:var(--r-sheet); padding:16px; display:flex; flex-direction:column; gap:6px; background:var(--surface);}
+  .timer{font-size:14px; font-weight:700; color:var(--warning); text-align:right;}
+  .skeleton{height:64px; border-radius:var(--r); background:linear-gradient(90deg,#eef2f7 25%,#e2e8f0 37%,#eef2f7 63%); background-size:400% 100%; animation:sk 1.4s infinite;}
+  @keyframes sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
+  .toast{position:absolute; left:16px; right:16px; bottom:90px; background:var(--ink); color:#fff; font-size:14px; padding:12px 16px; border-radius:var(--r); display:none; z-index:50;}
+  .statusbar{height:26px; background:rgba(15,23,42,.06); display:flex; align-items:center; justify-content:space-between; padding:0 16px; font-size:11px; color:var(--muted); flex:none;}
+</style>
+</head>
+<body>
+<h1>10 é + · Protótipo navegável (Fase 1)</h1>
+<p class="hint">Fluxo principal: Cliente = Home → Destino → Fila → Acompanhar → Pagamento → Avaliar. Parceiro = Painel → Oferta → Corrida → Confirmação. Alterne o produto e simule OFFLINE (somente leitura + fila de posição, conforme ADX-UX-3).</p>
+
+<div class="controls">
+  <button id="tab-cliente" class="on" onclick="setProduct('cliente')">App Cliente</button>
+  <button id="tab-parceiro" onclick="setProduct('parceiro')">App Parceiro</button>
+  <button id="btn-offline" class="warn" onclick="toggleOffline()">Simular OFFLINE</button>
+</div>
+
+<div class="phone">
+  <!-- ==================== CLIENTE ==================== -->
+  <section id="cli-home" class="screen active">
+    <div class="statusbar"><span>14:02</span><span>4G ▮▮▮</span></div>
+    <div class="banner">Sem sinal — você pode ver recentes, mas pede a corrida ao reconectar</div>
+    <div class="map">
+      <div class="dot"></div>
+      <div style="position:absolute; top:16px; left:16px; right:16px; background:#fff; border-radius:999px; padding:14px 18px; box-shadow:0 4px 16px rgba(15,23,42,.15); font-size:15px; color:var(--muted);">Para onde?</div>
+      <div style="position:absolute; bottom:16px; left:16px; right:16px; background:#fff; border-radius:12px; padding:12px 14px; box-shadow:0 4px 16px rgba(15,23,42,.12);">
+        <div class="sm" style="margin-bottom:6px;">Recentes</div>
+        <div class="row" style="padding:6px 0;">📍 Centro · Av. Jorge Teixeira</div>
+        <div class="row" style="padding:6px 0;">🏠 Casa · B. São Pedro</div>
+      </div>
+    </div>
+    <div class="nav">
+      <button class="sel"><span class="ico">⌂</span>Início</button>
+      <button onclick="toast('Histórico vazio: “Sua primeira corrida aparece aqui”')"><span class="ico">≡</span>Histórico</button>
+      <button onclick="toast('Perfil: pagamentos, contatos de confiança, consentimentos LGPD')"><span class="ico">☺</span>Perfil</button>
+    </div>
+  </section>
+
+  <section id="cli-destino" class="screen">
+    <div class="statusbar"><span>14:02</span><span>4G ▮▮▮</span></div>
+    <div class="banner">Sem sinal — preço será calculado ao reconectar</div>
+    <div class="map"><div class="dot"></div><div class="pin"></div><div class="route"></div></div>
+    <div class="sheet">
+      <div class="field">A · Av. Jorge Teixeira</div>
+      <div class="field">B · B. São Pedro</div>
+      <div class="opt sel" onclick="pickPay(this)">
+        <span><strong>Tarifa calculada</strong><br><span class="sm">chega em 4 min</span></span>
+        <span class="big">R$ 18,90</span>
+      </div>
+      <div class="opt" onclick="toast('Negociar: você propõe e os motoristas contrapropõem')">
+        <span><strong>Negociar o valor</strong><br><span class="sm">estilo inDrive</span></span><span class="med">✎</span>
+      </div>
+      <div class="row between"><span class="chip">✓ Pix</span><span class="sm">trocar método</span></div>
+      <button id="btn-chamar" class="btn primary" onclick="go('cli-fila')">Chamar</button>
+      <p class="sm">Toque 3 · solicitar corrida em 3 toques (busca → destino → chamar)</p>
+    </div>
+  </section>
+
+  <section id="cli-fila" class="screen">
+    <div class="statusbar"><span>14:03</span><span>4G ▮▮▮</span></div>
+    <div class="banner">Sem sinal — pedido ativo, enviaremos quando voltar</div>
+    <div class="map dark"><div class="dot"></div></div>
+    <div class="sheet">
+      <div class="med">Procurando motorista…</div>
+      <p class="sm">Normalmente leva 3 min no seu bairro. Não feche o app.</p>
+      <div class="skeleton"></div>
+      <button class="btn ghost" onclick="go('cli-home');toast('Cancelado sem falta (antes do aceite)')">Cancelar pedido</button>
+    </div>
+  </section>
+
+  <section id="cli-acompanha" class="screen">
+    <div class="statusbar"><span>14:05</span><span>4G ▮▮▮</span></div>
+    <div class="banner">Sem sinal fraco — localização pode estar atrasada</div>
+    <div class="map"><div class="dot"></div></div>
+    <div class="sheet">
+      <div class="row between">
+        <div class="row"><div style="width:44px;height:44px;border-radius:50%;background:#CBD5E1;text-align:center;line-height:44px;">🙂</div>
+        <div><strong>João M.</strong><br><span class="sm">Honda HB20 · placa ABC1D23 · ★ 4,9</span></div></div>
+        <span class="chip earn">chega em 4 min</span>
+      </div>
+      <div class="timeline">
+        <div class="step done">Aceitou sua corrida</div>
+        <div class="step done">A caminho — alarme em 1 min</div>
+        <div class="step">Chegou (aviso automático)</div>
+      </div>
+      <div class="row">
+        <button class="btn ghost" onclick="toast('Link compartilhado: expira ao final da corrida')">Compartilhar</button>
+        <button class="btn danger" onclick="toast('SOS: 192 · 190 · suporte (2 min) · contatos')">SOS</button>
+      </div>
+      <button class="btn primary" onclick="toast('Pagamento automático após a viagem')">Ver detalhes</button>
+    </div>
+  </section>
+
+  <section id="cli-pagamento" class="screen">
+    <div class="statusbar"><span>14:31</span><span>4G ▮▮▮</span></div>
+    <div class="map" style="max-height:120px;"><div class="pin"></div></div>
+    <div class="sheet">
+      <div class="sm">Viagem concluída · B. São Pedro</div>
+      <div class="big">R$ 18,90</div>
+      <div class="row between sm"><span>Tarifa</span><span>R$ 18,90</span></div>
+      <div class="row between sm"><span>Método</span><span>Pix ✓</span></div>
+      <div id="pay-status" class="chip">Pagando…</div>
+      <button id="btn-pagar" class="btn primary" onclick="payNow()">Pagar R$ 18,90</button>
+      <button class="btn ghost" onclick="go('cli-avaliar')">Continuar</button>
+    </div>
+  </section>
+
+  <section id="cli-avaliar" class="screen">
+    <div class="statusbar"><span>14:32</span><span>4G ▮▮▮</span></div>
+    <div class="sheet" style="margin-top:auto; border-radius:12px;">
+      <div class="med" style="text-align:center;">Como foi a corrida com João?</div>
+      <div class="stars" onclick="rate(event)">
+        <span class="on">★</span><span class="on">★</span><span class="on">★</span><span class="on">★</span><span class="on">★</span>
+      </div>
+      <div class="chips">
+        <span class="on">Pontual</span><span class="on">Direção segura</span><span>Limpeza</span><span>Bom preço</span>
+      </div>
+      <button class="btn primary" onclick="go('cli-home');toast('Obrigado! Sua nota 10 ajuda o motorista')">Enviar</button>
+      <button class="btn ghost" onclick="toast('Ticket pré-preenchido com a corrida')">Algo deu errado?</button>
+    </div>
+  </section>
+
+  <!-- ==================== PARCEIRO ==================== -->
+  <section id="par-painel" class="screen">
+    <div class="statusbar"><span>14:02</span><span>4G ▮▮▮</span></div>
+    <div class="banner">Sem sinal — enviando posição: 3 pendentes (fila local)</div>
+    <div class="sheet" style="margin-top:16px; margin-left:16px; margin-right:16px; border-radius:12px;">
+      <div class="row between">
+        <span class="chip earn" id="par-mode">PASSE ATIVO · 11 h 42 min</span>
+        <span class="sm">hoje: <strong id="par-earn">R$ 84,30</strong></span>
+      </div>
+      <div class="offer" style="border-color:var(--earn);">
+        <div class="row between"><strong>Seu passe</strong><span class="sm">renova em 1 toque</span></div>
+        <div class="big" style="color:var(--earn);">100% seu</div>
+        <div class="sm">Vence 21:00 · avisos 60/15/0 min</div>
+      </div>
+      <button id="par-cta" class="btn earn" onclick="toggleOnline()">FICAR ONLINE</button>
+      <div class="row" style="gap:8px;">
+        <button class="btn ghost" onclick="toast('Fila FIFO: novo passe inicia ao vencer o atual')">Passe</button>
+        <button class="btn ghost" onclick="toast('Extrato: bruto · taxa · comissão · líquido · modo')">Extrato</button>
+        <button class="btn ghost" onclick="toast('Tickets: status + SLA visível')">Ajuda</button>
+      </div>
+      <p class="sm">Sem passe você roda na comissão de 12% — tudo bem. Nunca bloqueamos por falta de passe.</p>
+    </div>
+  </section>
+
+  <section id="par-oferta" class="screen">
+    <div class="statusbar"><span>14:06</span><span>4G ▮▮▮</span></div>
+    <div class="map"><div class="dot"></div><div class="pin"></div></div>
+    <div class="sheet">
+      <div class="offer">
+        <div class="timer" id="offer-timer">15 s</div>
+        <div class="big">R$ 18,90</div>
+        <div class="sm">coleta 4 min · 7,2 km · destino aproximado: B. São Pedro</div>
+        <div class="med" style="color:var(--earn);">≈ R$ 24/h</div>
+      </div>
+      <div class="row">
+        <button class="btn ghost" onclick="backToPanel('Recusada — reofertada a outro parceiro')">Recusar</button>
+        <button class="btn earn" onclick="go('par-corrida')">Aceitar</button>
+      </div>
+      <p class="sm">Modo da corrida: PASSE → 100% seu (capturado no aceite)</p>
+    </div>
+  </section>
+
+  <section id="par-corrida" class="screen">
+    <div class="statusbar"><span>14:07</span><span>4G ▮▮▮</span></div>
+    <div class="banner">Sem sinal fraco — ETA calculado no servidor</div>
+    <div class="map"><div class="dot"></div><div class="route"></div><div class="pin"></div></div>
+    <div class="sheet">
+      <div class="row between"><strong>Mariana S. ★ 4,8</strong><span class="chip" id="phase-chip">A CAMINHO</span></div>
+      <div class="timeline">
+        <div class="step done" id="ph1">A caminho da coleta</div>
+        <div class="step" id="ph2">Chegou (espera 5 min · no-show)</div>
+        <div class="step" id="ph3">Em viagem · navegar: Google Maps | Waze</div>
+      </div>
+      <button id="phase-cta" class="btn primary" onclick="advancePhase()">Cheguei</button>
+      <button class="btn ghost" onclick="toast('Deep link abre Google Maps/Waze com o destino')">Navegar ↗</button>
+    </div>
+  </section>
+
+  <section id="par-confirma" class="screen">
+    <div class="statusbar"><span>14:31</span><span>4G ▮▮▮</span></div>
+    <div class="sheet" style="margin-top:auto; margin-left:16px; margin-right:16px; border-radius:12px; margin-bottom:16px;">
+      <div class="sm">Pagamento em dinheiro</div>
+      <div class="big">R$ 18,90</div>
+      <button class="btn earn" onclick="confirmCash()">Recebi o valor</button>
+      <button class="btn ghost" onclick="toast('Divergência abre ticket com timeline da corrida')">Passageiro pagou menos</button>
+      <button class="btn ghost" onclick="toast('Dívida: bloqueia só corridas em dinheiro acima do limite')">Não recebi</button>
+      <p class="sm">Modo PASSE: você não deve nada à plataforma por esta corrida.</p>
+    </div>
+  </section>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+let product='cliente', offline=false, phase=1, online=false;
+const screens={cliente:['cli-home','cli-destino','cli-fila','cli-acompanha','cli-pagamento','cli-avaliar'],
+               parceiro:['par-painel','par-oferta','par-corrida','par-confirma']};
+function go(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  if(id==='cli-pagamento')setTimeout(()=>{const s=document.getElementById('pay-status');if(s){s.textContent='Pago ✓';s.className='chip earn';}},1400);
+}
+function setProduct(p){
+  product=p;
+  document.getElementById('tab-cliente').classList.toggle('on',p==='cliente');
+  document.getElementById('tab-parceiro').classList.toggle('on',p==='parceiro');
+  go(p==='cliente'?'cli-home':'par-painel');
+}
+function toggleOffline(){
+  offline=!offline;
+  document.body.classList.toggle('offline',offline);
+  document.getElementById('btn-offline').classList.toggle('on',offline);
+  document.getElementById('btn-chamar').disabled=offline;
+  toast(offline?'OFFLINE: somente leitura + fila de posição (ADX-UX-3)':'De volta ao ONLINE');
+}
+function pickPay(el){document.querySelectorAll('#cli-destino .opt').forEach(o=>o.classList.remove('sel'));el.classList.add('sel');}
+function payNow(){document.getElementById('pay-status').textContent='Pago ✓';document.getElementById('pay-status').className='chip earn';}
+function rate(e){const t=e.target;if(t.tagName==='SPAN'){t.classList.toggle('on');}}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',3200);}
+function backToPanel(msg){go('par-painel');toast(msg);}
+function toggleOnline(){
+  online=!online;
+  const cta=document.getElementById('par-cta');
+  if(online){cta.textContent='FICAR OFFLINE';cta.className='btn ghost';toast('Online — uma oferta chega em 1…');setTimeout(()=>{if(online)go('par-oferta');},1500);}
+  else{cta.textContent='FICAR ONLINE';cta.className='btn earn';toast('Offline — você não recebe ofertas');}
+}
+let secs=15;
+setInterval(()=>{const el=document.getElementById('offer-timer');if(el&&document.getElementById('par-oferta').classList.contains('active')){secs=secs>0?secs-1:15;el.textContent=secs+' s';}},1000);
+function advancePhase(){
+  if(phase===1){phase=2;document.getElementById('phase-chip').textContent='CHEGOU';document.getElementById('ph1').classList.add('done');document.getElementById('ph2').classList.add('done');document.getElementById('phase-cta').textContent='Iniciar viagem';}
+  else if(phase===2){phase=3;document.getElementById('phase-chip').textContent='EM VIAGEM';document.getElementById('ph3').classList.add('done');document.getElementById('phase-cta').textContent='Finalizar';}
+  else{go('par-confirma');phase=1;}
+}
+function confirmCash(){
+  const earn=document.getElementById('par-earn');earn.textContent='R$ 103,20';
+  document.getElementById('par-mode').textContent='PASSE ATIVO · 11 h 11 min';
+  online=false;const cta=document.getElementById('par-cta');cta.textContent='FICAR ONLINE';cta.className='btn earn';
+  go('par-painel');toast('Corrida concluída: R$ 18,90 é 100% seu (modo capturado no aceite)');
+}
+</script>
+</body>
+</html>

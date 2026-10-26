@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# 10 é + — o que NÃO entra no versionamento
+# Regra: só produto (código, contrato, docs, SQL e kit de marca) é versionado.
+# Artefato de execução se regenera; não vira histórico.
+# ---------------------------------------------------------------------------
+
+# Kit de marca original (10-e-mais-HD/): ~88 MB de PNGs de design que não
+# mudam e que os apps não consomem diretamente — os assets otimizados estão em
+# app/*/assets/kit/. Fica fora do repositório para o backup não carregar
+# binário morto; continua no disco (e no backup do OneDrive). Para versioná-lo
+# algum dia, use Git LFS: `git lfs track "10-e-mais-HD/**"`.
+10-e-mais-HD/
+
+# Verificação e demonstração: execuções do E2E, capturas de tela de teste,
+# logs de API e temporários (~440 MB). Fonte: scripts/e2e_emulator.py,
+# scripts/hold_search.py e execuções manuais no emulador.
+.preview/
+
+# Logs de qualquer ferramenta (API de demo, emulador, adb, builds).
+*.log
+
+# Estado interno do Freebuff (id do projeto e logs de sessão).
+.freebuff/project-id
+.freebuff/.gitignore
+.freebuff/*.log
+
+# Supabase CLI: segredos do `supabase start`, branch atual e cache local.
+supabase/.temp/
+supabase/.branches/
+
+# ---------------------------------------------------------------------------
+# Flutter / Dart — cada app também tem o seu .gitignore; aqui fica o reforço
+# para os diretórios gerados que ficam grandes ou trazem caminho da máquina.
+# ---------------------------------------------------------------------------
+app/*/build/
+app/*/.dart_tool/
+app/*/.flutter-plugins
+app/*/.flutter-plugins-dependencies
+app/*/.pub-cache/
+app/*/coverage/
+app/*/android/.gradle/
+app/*/android/local.properties
+app/*/android/app/debug/
+app/*/android/app/profile/
+app/*/android/app/release/
+app/*/ios/Flutter/Flutter.framework
+app/*/ios/Pods/
+
+# Artefatos de build móvel e web.
+*.apk
+*.aab
+*.ipa
+app/*/web/.dart_tool/
+
+# ---------------------------------------------------------------------------
+# Python — scripts de demo, smokes, E2E e simuladores.
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node (Edge Functions do Supabase).
+node_modules/
+
+# ---------------------------------------------------------------------------
+# Sistema operacional e editores.
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp

@@ -1,0 +1,35 @@
+name: parceiro
+description: "10 é + Parceiro — app do motorista (MVP-A)."
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_map: ^8.3.2
+  http: ^1.2.0
+  intl: ^0.19.0
+  latlong2: ^0.10.1
+  web: ^1.1.1
+  shared_preferences: ^2.3.2
+  geolocator: ^14.1.2
+  # Mapas/navegação: abstração MapProvider (R1) — deep link (MVP-A) e
+  # navegação embutida (MVP-B) entram no módulo de mapas; o ponto de troca
+  # já está isolado na tela em corrida.
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  # Kit de marca 10 é + (10-e-mais-HD/ otimizado p/ bundle ~1,5 MB).
+  assets:
+    - assets/logo/
+    - assets/vehicles/
+    - assets/map/
+    - assets/apresentacao/
