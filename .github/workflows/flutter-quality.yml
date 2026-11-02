@@ -1,0 +1,63 @@
+name: flutter-quality
+
+# Gate barato e rápido (sem emulador): análise estática + testes dos dois apps e
+# do design system compartilhado. É o primeiro verde a consultar num PR — o E2E
+# de emulador (`e2e-emulator`) continua sob demanda por ser pesado.
+#
+# `dart analyze` (não `flutter analyze`): o servidor LSP desta máquina quebra com
+# o acento no caminho do projeto; no runner Linux os dois funcionam, mas o comando
+# fica o mesmo do host e do README para não criar diferença de ambiente.
+on:
+  push:
+    paths:
+      - "app/**"
+      - "packages/**"
+      - ".github/workflows/flutter-quality.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "packages/**"
+      - ".github/workflows/flutter-quality.yml"
+
+jobs:
+  analise-e-testes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # O pacote vem primeiro: os apps dependem dele por path.
+      - name: Design system — análise e testes
+        working-directory: packages/ten_design
+        run: |
+          flutter pub get
+          dart analyze
+          flutter test
+
+      # Contraste do teal e dos CTA é teste, não revisão visual: o
+      # test/contrast_test.dart do pacote roda acima e falha se um tom mudar.
+      - name: Design system — teal de marca inalterado
+        run: |
+          if ! grep -q "static const primary = Color(0xFF05998C);" \
+            packages/ten_design/lib/src/tokens/colors.dart; then
+            echo "::error::O teal da marca (#05998C) foi alterado em colors.dart."
+            exit 1
+          fi
+
+      - name: Apps — análise e testes
+        run: |
+          set -euo pipefail
+          for app in passageiro parceiro; do
+            echo "::group::$app"
+            cd "app/$app"
+            flutter pub get
+            dart analyze lib test
+            flutter test
+            cd ../..
+            echo "::endgroup::"
+          done

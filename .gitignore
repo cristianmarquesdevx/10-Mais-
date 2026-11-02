@@ -24,9 +24,17 @@
 .freebuff/.gitignore
 .freebuff/*.log
 
-# Supabase CLI: segredos do `supabase start`, branch atual e cache local.
+# Supabase CLI: branch atual e cache local do `supabase start`.
 supabase/.temp/
 supabase/.branches/
+
+# Segredos locais: nunca versionar. O `supabase start` grava neste arquivo as
+# chaves do stack local; as de produção vivem no secret manager do projeto.
+supabase/.env
+.env
+.env.local
+.env.*.local
+!.env.example
 
 # ---------------------------------------------------------------------------
 # Flutter / Dart — cada app também tem o seu .gitignore; aqui fica o reforço
@@ -60,6 +68,15 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# Pacotes internos (packages/ten_design) — mesmos artefatos dos apps.
+packages/*/.dart_tool/
+packages/*/build/
+packages/*/.flutter-plugins
+packages/*/.flutter-plugins-dependencies
+packages/*/coverage/
+# Pacote reutilizável não fixa versões: quem resolve é o lock de cada app.
+packages/*/pubspec.lock
 
 # Node (Edge Functions do Supabase).
 node_modules/
