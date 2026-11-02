@@ -46,122 +46,140 @@ class _TopBar extends StatelessWidget {
   const _TopBar();
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.all(AppSpace.l),
-        child: Row(
-          children: [
-            // Mapa do passageiro é claro (OSM padrão): a marca usa a versão
-            // com texto escuro, dentro de uma pill — a arte tem fundo branco
-            // e, solta, virava um retângulo de cantos retos sobre o mapa.
-            Container(
-              padding: const EdgeInsets.fromLTRB(AppSpace.s, 6, AppSpace.m, 6),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(AppSpace.radiusChip),
-                boxShadow: appShadow,
-              ),
-              child: Image.asset(
-                'assets/kit/logo_completo.png',
-                height: 28,
-                errorBuilder: (_, __, ___) => const Row(children: [
-                  Icon(Icons.add, color: AppColors.primary, size: 18),
-                  SizedBox(width: 4),
-                  Text('10 é +',
-                      style: TextStyle(
-                          color: AppColors.ink,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16)),
-                ]),
-              ),
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.all(AppSpace.l),
+      child: Row(
+        children: [
+          // Mapa do passageiro é claro (OSM padrão): a marca usa a versão
+          // com texto escuro, dentro de uma pill — a arte tem fundo branco
+          // e, solta, virava um retângulo de cantos retos sobre o mapa.
+          Container(
+            padding: const EdgeInsets.fromLTRB(AppSpace.s, 6, AppSpace.m, 6),
+            decoration: BoxDecoration(
+              color: t.surface,
+              borderRadius: BorderRadius.circular(AppSpace.radiusChip),
+              boxShadow: dark ? appShadowDark() : appShadow,
             ),
-            const Spacer(),
-            IconButton.filledTonal(
-              icon: const Icon(Icons.person_outline),
-              tooltip: 'Perfil',
-              onPressed: () => Navigator.pushNamed(context, '/perfil'),
+            child: Image.asset(
+              'assets/kit/logo_completo.png',
+              height: 28,
+              errorBuilder: (_, __, ___) => Row(children: [
+                Icon(Icons.add, color: t.primary, size: 18),
+                const SizedBox(width: 4),
+                Text('10 é +',
+                    style: TextStyle(
+                        color: t.ink,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16)),
+              ]),
             ),
-          ],
-        ),
-      );
+          ),
+          const Spacer(),
+          IconButton.filledTonal(
+            icon: const Icon(Icons.person_outline),
+            tooltip: 'Perfil',
+            onPressed: () => Navigator.pushNamed(context, '/perfil'),
+            style: IconButton.styleFrom(
+              backgroundColor: t.primary,
+              foregroundColor: t.ink,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ActiveRideCard extends StatelessWidget {
   const _ActiveRideCard({required this.rideId});
   final String rideId;
   @override
-  Widget build(BuildContext context) => Container(
-        margin:
-            const EdgeInsets.fromLTRB(AppSpace.l, 0, AppSpace.l, AppSpace.s),
-        padding: const EdgeInsets.all(AppSpace.l),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(AppSpace.radiusSheet),
-          boxShadow: appShadow,
-        ),
-        child: Row(children: [
-          const Icon(Icons.local_taxi, color: AppColors.primary),
-          const SizedBox(width: AppSpace.m),
-          const Expanded(child: Text('Corrida em andamento')),
-          FilledButton(
-            // O tema deixa o FilledButton com largura infinita; dentro de uma
-            // Row isso esmaga o texto do card — aqui a largura é explícita.
-            style: FilledButton.styleFrom(
-              minimumSize: const Size(84, 44),
-              padding: const EdgeInsets.symmetric(horizontal: AppSpace.l),
-            ),
-            onPressed: () => Navigator.pushNamed(context, '/acompanhar'),
-            child: const Text('Ver'),
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      margin:
+          const EdgeInsets.fromLTRB(AppSpace.l, 0, AppSpace.l, AppSpace.s),
+      padding: const EdgeInsets.all(AppSpace.l),
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(AppSpace.radiusSheet),
+        boxShadow: dark ? appShadowDark() : appShadow,
+      ),
+      child: Row(children: [
+        Icon(Icons.local_taxi, color: t.primary),
+        const SizedBox(width: AppSpace.m),
+        const Expanded(child: Text('Corrida em andamento')),
+        FilledButton(
+          // O tema deixa o FilledButton com largura infinita; dentro de uma
+          // Row isso esmaga o texto do card — aqui a largura é explícita.
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(84, 44),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpace.l),
+            backgroundColor: t.primary,
+            foregroundColor: t.ink,
           ),
-        ]),
-      );
+          onPressed: () => Navigator.pushNamed(context, '/acompanhar'),
+          child: const Text('Ver'),
+        ),
+      ]),
+    );
+  }
 }
 
 class _BottomActions extends StatelessWidget {
   const _BottomActions({required this.onHistory});
   final VoidCallback onHistory;
   @override
-  Widget build(BuildContext context) => Container(
-        padding: EdgeInsets.fromLTRB(AppSpace.l, AppSpace.l, AppSpace.l,
-            AppSpace.xl + MediaQuery.of(context).padding.bottom),
-        decoration: const BoxDecoration(
-          color: AppColors.surface,
-          borderRadius:
-              BorderRadius.vertical(top: Radius.circular(AppSpace.radiusSheet)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            GradientButton(
-              onPressed: () => Navigator.pushNamed(context, '/destino'),
-              child: const Text('Para onde?'),
-            ),
-            const SizedBox(height: AppSpace.m),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onHistory,
-                    icon: const Icon(Icons.history),
-                    label: const Text('Histórico'),
-                  ),
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: EdgeInsets.fromLTRB(AppSpace.l, AppSpace.l, AppSpace.l,
+          AppSpace.xl + MediaQuery.of(context).padding.bottom),
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: const BorderRadius.vertical(
+            top: Radius.circular(AppSpace.radiusSheet)),
+        boxShadow: dark ? appShadowDark() : appShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          GradientButton(
+            onPressed: () => Navigator.pushNamed(context, '/destino'),
+            child: const Text('Para onde?'),
+          ),
+          const SizedBox(height: AppSpace.m),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onHistory,
+                  icon: const Icon(Icons.history),
+                  label: const Text('Histórico'),
                 ),
-                const SizedBox(width: AppSpace.m),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => showSosSheet(context),
-                    // `Icons.emergency` desenha um asterisco e o botão
-                    // parecia um erro de digitação; escudo lê como segurança.
-                    icon: const Icon(Icons.gpp_maybe_outlined,
-                        color: AppColors.danger),
-                    label: const Text('SOS',
-                        style: TextStyle(
-                            color: AppColors.danger,
-                            fontWeight: FontWeight.w700)),
-                  ),
+              ),
+              const SizedBox(width: AppSpace.m),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => showSosSheet(context),
+                  // `Icons.emergency` desenha um asterisco e o botão
+                  // parecia um erro de digitação; escudo lê como segurança.
+                  icon: Icon(Icons.gpp_maybe_outlined, color: t.danger),
+                  label: Text('SOS',
+                      style: TextStyle(
+                          color: t.danger,
+                          fontWeight: FontWeight.w700)),
                 ),
-              ],
-            ),
-          ],
-        ),
-      );
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }

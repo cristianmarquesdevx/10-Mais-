@@ -96,6 +96,7 @@ class _OfertaScreenState extends State<OfertaScreen> {
   @override
   Widget build(BuildContext context) {
     final p = AppScope.of(context);
+    final t = tokensOf(context);
     final offers = p.offers;
     if (offers.isEmpty) {
       return const Scaffold(
@@ -130,7 +131,7 @@ class _OfertaScreenState extends State<OfertaScreen> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: AppSpace.m, vertical: 4),
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.14),
+                      color: t.primary.withValues(alpha: 0.14),
                       borderRadius:
                           BorderRadius.circular(AppSpace.radiusChip),
                     ),
@@ -177,8 +178,8 @@ class _OfertaScreenState extends State<OfertaScreen> {
                       const SizedBox(height: AppSpace.m),
                       Row(children: [
                         if (o.passengerRating != null) ...[
-                          const Icon(Icons.star_rounded,
-                              size: 18, color: Color(0xFFF5A623)),
+                          Icon(Icons.star_rounded,
+                              size: 18, color: t.warning),
                           const SizedBox(width: 2),
                           Text(_nota(o.passengerRating!),
                               style: const TextStyle(
@@ -211,8 +212,8 @@ class _OfertaScreenState extends State<OfertaScreen> {
                       child: Column(children: [
                         if (o.pickupDistanceKm != null)
                           ListTile(
-                            leading: const Icon(Icons.near_me_outlined,
-                                color: AppColors.primary),
+                            leading: Icon(Icons.near_me_outlined,
+                                color: t.primary),
                             title: Text('Coleta a ${_km(o.pickupDistanceKm!)} km'),
                             subtitle: o.pickupEtaMin != null
                                 ? Text('≈ ${o.pickupEtaMin} min até o embarque')
@@ -223,11 +224,11 @@ class _OfertaScreenState extends State<OfertaScreen> {
                               height: 1,
                               indent: 16,
                               endIndent: 16,
-                              color: Colors.grey.shade200),
+                              color: t.hairline.withValues(alpha: 0.5)),
                         if (o.tripDistanceKm != null)
                           ListTile(
-                            leading: const Icon(Icons.route_outlined,
-                                color: AppColors.primary),
+                            leading: Icon(Icons.route_outlined,
+                                color: t.primary),
                             title: Text(
                                 'Corrida de ${_km(o.tripDistanceKm!)} km'),
                             subtitle: o.tripDurationMin != null
@@ -242,10 +243,10 @@ class _OfertaScreenState extends State<OfertaScreen> {
                               height: 1,
                               indent: 16,
                               endIndent: 16,
-                              color: Colors.grey.shade200),
+                              color: t.hairline.withValues(alpha: 0.5)),
                           ListTile(
-                            leading: const Icon(Icons.location_on_outlined,
-                                color: AppColors.muted),
+                            leading: Icon(Icons.location_on_outlined,
+                                color: t.muted),
                             title: Text('Destino: ${o.destinationArea}'),
                           ),
                         ],
@@ -278,7 +279,7 @@ class _OfertaScreenState extends State<OfertaScreen> {
                         '$secs s',
                         style: AppType.countdown.copyWith(
                           color:
-                              secs <= 5 ? AppColors.danger : AppColors.primary,
+                              secs <= 5 ? t.danger : t.primary,
                           fontSize: 39,
                         ),
                       ),
@@ -286,7 +287,7 @@ class _OfertaScreenState extends State<OfertaScreen> {
                     const SizedBox(height: AppSpace.m),
                     FilledButton(
                       style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.earn),
+                          backgroundColor: t.earn),
                       onPressed: p.busy
                           ? null
                           : () async {
@@ -332,11 +333,13 @@ class _WhyCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final d = dispatch;
+    final t = tokensOf(context);
     final items = <Widget>[
-      _item(Icons.emoji_events_outlined, 'Posição',
+      _item(context, Icons.emoji_events_outlined, 'Posição',
           d.pool > 1 ? '1º de ${d.pool} na fila' : 'Único na fila'),
       if (pickupDistanceKm != null)
         _item(
+          context,
           Icons.near_me_outlined,
           'Até o embarque',
           pickupEtaMin != null
@@ -344,9 +347,10 @@ class _WhyCard extends StatelessWidget {
               : '${_km(pickupDistanceKm!)} km',
         ),
       if (d.onlineSeconds != null)
-        _item(Icons.schedule, 'Online há', _dur(d.onlineSeconds!)),
+        _item(context, Icons.schedule, 'Online há', _dur(d.onlineSeconds!)),
       if (d.rating != null)
         _item(
+          context,
           Icons.star_rounded,
           'Sua nota',
           (d.ratingCount ?? 0) > 0
@@ -377,15 +381,15 @@ class _WhyCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(AppSpace.m),
       decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.06),
+        color: t.primary.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(AppSpace.radiusCard),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            const Icon(Icons.insights_outlined,
-                size: 15, color: AppColors.primary),
+            Icon(Icons.insights_outlined,
+                size: 15, color: t.primary),
             const SizedBox(width: 6),
             const Expanded(
               child: Text(
@@ -396,7 +400,7 @@ class _WhyCard extends StatelessWidget {
             if (d.acceptanceRate != null)
               Text(
                 'aceite ${(d.acceptanceRate! * 100).round()}%',
-                style: const TextStyle(fontSize: 11, color: AppColors.muted),
+                style: TextStyle(fontSize: 11, color: t.muted),
               ),
           ]),
           const SizedBox(height: AppSpace.s),
@@ -406,14 +410,16 @@ class _WhyCard extends StatelessWidget {
     );
   }
 
-  Widget _item(IconData icon, String label, String value) => Column(
+  Widget _item(BuildContext context, IconData icon, String label, String value) {
+    final t = tokensOf(context);
+    return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Icon(icon, size: 13, color: AppColors.muted),
+            Icon(icon, size: 13, color: t.muted),
             const SizedBox(width: 4),
             Text(label,
-                style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+                style: TextStyle(fontSize: 11, color: t.muted)),
           ]),
           const SizedBox(height: 2),
           Text(
@@ -425,6 +431,7 @@ class _WhyCard extends StatelessWidget {
         ],
       );
 }
+  }
 
 /// Tempo online no formato que se fala: `12 min`, `1 h 20 min`, `3 h`.
 String _dur(int seconds) {
@@ -443,25 +450,28 @@ class _MultiplierChip extends StatelessWidget {
   final double multiplier;
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(
-            horizontal: AppSpace.s, vertical: 3),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF5A623).withValues(alpha: 0.16),
-          borderRadius: BorderRadius.circular(AppSpace.radiusChip),
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpace.s, vertical: 3),
+      decoration: BoxDecoration(
+        color: t.warning.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(AppSpace.radiusChip),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.bolt, size: 13, color: t.warning),
+        const SizedBox(width: 2),
+        Text(
+          'Preço ×${_mult(multiplier)}',
+          style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: t.warning),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.bolt, size: 13, color: Color(0xFFB26A00)),
-          const SizedBox(width: 2),
-          Text(
-            'Preço ×${_mult(multiplier)}',
-            style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFFB26A00)),
-          ),
-        ]),
-      );
+      ]),
+    );
+  }
 }
 
 /// Quilometragem no padrão pt-BR (`1,2`), igual ao que o passageiro vê:

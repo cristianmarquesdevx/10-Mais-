@@ -27,7 +27,6 @@ class _PassageiroAppState extends State<PassageiroApp> {
   bool _signedIn = false; // P1: tela de apresentação/login antes da home
 
   // Tema
-  ThemeModePref _themeMode = ThemeModePref.light;
   bool _themeLoaded = false;
 
   @override
@@ -45,24 +44,12 @@ class _PassageiroAppState extends State<PassageiroApp> {
 
   Future<void> _loadTheme() async {
     final mode = await ThemePrefs.getMode();
-    if (mounted) {
-      setState(() {
-        _themeMode = mode;
-        _themeLoaded = true;
-      });
-    }
+    // O Perfil escreve neste notifier ao trocar de tema; aqui só semeia o
+    // valor salvo, para o app abrir já no modo escolhido.
+    themeModeNotifier.value = mode;
+    if (mounted) setState(() => _themeLoaded = true);
   }
 
-  ThemeMode _toFrameworkThemeMode() {
-    switch (_themeMode) {
-      case ThemeModePref.light:
-        return ThemeMode.light;
-      case ThemeModePref.dark:
-        return ThemeMode.dark;
-      case ThemeModePref.system:
-        return ThemeMode.system;
-    }
-  }
 
   @override
   void dispose() {
@@ -84,12 +71,18 @@ class _PassageiroAppState extends State<PassageiroApp> {
     return AppScope(
       ride: _ride,
       api: _api,
-      child: MaterialApp(
-        title: '10 é + Passageiro',
-        debugShowCheckedModeBanner: false,
-        theme: buildLightTheme(),
-        darkTheme: buildDarkTheme(),
-        themeMode: _toFrameworkThemeMode(),
+      // Escuta o modo ativo: trocar para "Escuro" no Perfil repinta o app na
+      // hora, sem precisar reabrir.
+      child: ValueListenableBuilder<ThemeModePref>(
+        valueListenable: themeModeNotifier,
+        builder: (context, mode, _) => MaterialApp(
+          title: '10 é + Passageiro',
+          debugShowCheckedModeBanner: false,
+          theme: buildLightTheme(),
+          darkTheme: buildDarkTheme(),
+          // O modo vem do seletor do Perfil (e do valor salvo). Fixar
+          // ThemeMode.light aqui desligava o tema escuro no app inteiro.
+          themeMode: mode.materialMode,
         // Ícones da barra de status/navegação acompanham o tema; o login
         // escuro sobrescreve com o próprio AnnotatedRegion.
         builder: (context, child) {
@@ -129,19 +122,21 @@ class _PassageiroAppState extends State<PassageiroApp> {
           '/invite': (_) => const InviteScreen(),
         },
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 /// InheritedNotifier: telas escutam o RideController sem package extra.
 class AppScope extends InheritedNotifier<RideController> {
   const AppScope({
     super.key,
-    required RideController ride,
+    required this.ride,
     required this.api,
     required super.child,
   }) : super(notifier: ride);
 
+  final RideController ride;
   final ApiClient api;
 
   static RideController of(BuildContext context) =>

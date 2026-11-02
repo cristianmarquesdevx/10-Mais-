@@ -224,10 +224,11 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
   Widget build(BuildContext context) {
     final from = _from;
     final to = _to;
+    final t = tokensOf(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Navegação')),
       body: from == null || to == null
-          ? _estado()
+          ? _estado(context)
           : Stack(
               children: [
                 FlutterMap(
@@ -251,12 +252,12 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
                         Polyline(
                           points: _points,
                           strokeWidth: 10,
-                          color: const Color(0xAA0B1220),
+                          color: t.graphite,
                         ),
                         Polyline(
                           points: _points,
                           strokeWidth: 6,
-                          color: AppColors.primary,
+                          color: t.primary,
                         ),
                       ]),
                     MarkerLayer(markers: [
@@ -271,8 +272,7 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
                         width: 38,
                         height: 38,
                         alignment: Alignment.topCenter,
-                        child: const Icon(Icons.place,
-                            size: 36, color: AppColors.danger),
+                        child: Icon(Icons.place, size: 36, color: t.danger),
                       ),
                     ]),
                     const SimpleAttributionWidget(
@@ -284,7 +284,7 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
                 SafeArea(
                   child: Column(
                     children: [
-                      _banner(),
+                      _banner(context),
                       const Spacer(),
                       _painel(),
                     ],
@@ -292,18 +292,20 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
                 ),
               ],
             ),
-    );
+      );
   }
 
-  Widget _estado() => Center(
+  Widget _estado(BuildContext context) {
+    final t = tokensOf(context);
+    return Center(
         child: Padding(
           padding: const EdgeInsets.all(AppSpace.xl),
           child: _error != null
               ? Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.wrong_location_outlined,
-                        size: 34, color: AppColors.warning),
+                    Icon(Icons.wrong_location_outlined,
+                        size: 34, color: t.warning),
                     const SizedBox(height: AppSpace.s),
                     Text(_error!, textAlign: TextAlign.center),
                     const SizedBox(height: AppSpace.m),
@@ -318,14 +320,16 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
               : const CircularProgressIndicator(),
         ),
       );
+  }
 
-  Widget _banner() {
+  Widget _banner(BuildContext context) {
     final next = _steps.isEmpty ? null : _steps.first;
+    final t = tokensOf(context);
     return Container(
       margin: const EdgeInsets.all(AppSpace.m),
       padding: const EdgeInsets.all(AppSpace.l),
       decoration: BoxDecoration(
-        color: AppColors.primary,
+        color: t.primary,
         borderRadius: BorderRadius.circular(AppSpace.radiusCard),
         boxShadow: [
           BoxShadow(
@@ -383,7 +387,7 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(children: [
-            const Icon(Icons.route_rounded, size: 18, color: AppColors.primary),
+            Icon(Icons.route_rounded, size: 18, color: t.primary),
             const SizedBox(width: 6),
             Text(
               _loading
@@ -393,8 +397,8 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
             ),
             const Spacer(),
             if (_gpsFallback)
-              const Text('GPS indisponível',
-                  style: TextStyle(fontSize: 11, color: AppColors.warning)),
+              Text('GPS indisponível',
+                  style: TextStyle(fontSize: 11, color: t.warning)),
             const SizedBox(width: 6),
             IconButton(
               tooltip: 'Recalcular rota',
@@ -415,7 +419,7 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
                   dense: true,
                   leading: Icon(s.icon,
                       size: 22,
-                      color: i == 0 ? AppColors.primary : t.muted),
+                      color: i == 0 ? t.primary : t.muted),
                   title: Text(s.text,
                       style: TextStyle(
                         fontWeight:
@@ -445,18 +449,21 @@ class _MotoDot extends StatelessWidget {
   const _MotoDot();
 
   @override
-  Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          color: AppColors.primary,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 3),
-          boxShadow: [
-            BoxShadow(
-                color: AppColors.primary.withValues(alpha: 0.45),
-                blurRadius: 10,
-                offset: const Offset(0, 2)),
-          ],
-        ),
-        child: const Icon(Icons.two_wheeler, size: 18, color: Colors.white),
-      );
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: t.primary,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 3),
+        boxShadow: [
+          BoxShadow(
+              color: t.primary.withValues(alpha: 0.45),
+              blurRadius: 10,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: const Icon(Icons.two_wheeler, size: 18, color: Colors.white),
+    );
+  }
 }

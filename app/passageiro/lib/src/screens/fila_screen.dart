@@ -300,24 +300,25 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
       );
 
   Widget _mapArea() {
+    final t = tokensOf(context);
     if (_locating) {
       return ColoredBox(
-        color: AppColors.background,
-        child: _fitting(const [
+        color: t.background,
+        child: _fitting([
           Icon(Icons.location_searching_rounded,
-              size: 26, color: AppColors.primary),
-          SizedBox(height: AppSpace.s),
-          Text('Obtendo sua localização…', style: AppType.label),
+              size: 26, color: t.primary),
+          const SizedBox(height: AppSpace.s),
+          const Text('Obtendo sua localização…', style: AppType.label),
         ]),
       );
     }
     final center = _center;
     if (center == null) {
       return ColoredBox(
-        color: AppColors.background,
+        color: t.background,
         child: _fitting([
-          const Icon(Icons.location_off_outlined,
-              size: 32, color: AppColors.primary),
+          Icon(Icons.location_off_outlined,
+              size: 32, color: t.primary),
           const SizedBox(height: AppSpace.s),
           Text(
             _locationFailure == LocationFailure.permissionDeniedForever
@@ -482,8 +483,7 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
         extendBodyBehindAppBar: true,
         appBar: AppBar(
           title: const Text('Busca ativa'),
-          backgroundColor:
-              AppColors.surface.withValues(alpha: 0.92),
+          backgroundColor: tokensOf(context).surface.withValues(alpha: 0.92),
           elevation: 0,
           scrolledUnderElevation: 0,
         ),
@@ -510,24 +510,24 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
                   child: Container(
                     padding: const EdgeInsets.all(AppSpace.l),
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.08),
+                      color: tokensOf(context).primary.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(AppSpace.radiusCard),
                       border: Border.all(
-                          color: AppColors.primary.withValues(alpha: 0.35)),
+                          color: tokensOf(context).primary.withValues(alpha: 0.35)),
                     ),
                     child: Row(children: [
-                      const Icon(Icons.savings_outlined,
-                          color: AppColors.earn, size: 20),
+                      Icon(Icons.savings_outlined,
+                          color: tokensOf(context).earn, size: 20),
                       const SizedBox(width: AppSpace.m),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('Valor da corrida',
+                            Text('Valor da corrida',
                                 style: TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
-                                    color: AppColors.earn)),
+                                    color: tokensOf(context).earn)),
                             Text('Congelado do valor do momento do pedido',
                                 style: AppType.label.copyWith(fontSize: 12)),
                           ],
@@ -544,7 +544,7 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
                   padding: const EdgeInsets.only(top: AppSpace.m),
                   child: Text(
                       'Proposta: ${brl(controller.proposedAmount ?? 0)}',
-                      style: AppType.title.copyWith(color: AppColors.earn)),
+                      style: AppType.title.copyWith(color: tokensOf(context).earn)),
                 ),
               ),
               Visibility(
@@ -572,8 +572,8 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
               ),
               const SizedBox(height: AppSpace.m),
               OutlinedButton(
-                style:
-                    OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: tokensOf(context).danger),
                 onPressed: controller.busy
                     ? null
                     : () async {
@@ -596,7 +596,7 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
                               ),
                               FilledButton(
                                 style: FilledButton.styleFrom(
-                                    backgroundColor: AppColors.danger),
+                                    backgroundColor: tokensOf(context).danger),
                                 onPressed: () =>
                                     Navigator.of(dialogCtx).pop(true),
                                 child: const Text('Sim, cancelar'),
@@ -616,7 +616,7 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
                               content: Text(isSearching
                                   ? 'Busca cancelada com sucesso.'
                                   : 'Corrida cancelada.'),
-                              backgroundColor: AppColors.primary,
+                              backgroundColor: tokensOf(context).primary,
                             ),
                           );
                           Navigator.of(context).popUntil((r) => r.isFirst);
@@ -625,7 +625,7 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
                             SnackBar(
                               content: Text(
                                   'Nao foi possivel cancelar (${controller.lastErrorCode}). Tente novamente.'),
-                              backgroundColor: AppColors.danger,
+                              backgroundColor: tokensOf(context).danger,
                             ),
                           );
                         }
@@ -671,7 +671,7 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
                         ),
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            color: AppColors.surface,
+                            color: tokensOf(context).surface,
                             borderRadius: BorderRadius.circular(
                                 AppSpace.radiusSheet),
                             boxShadow: [
@@ -852,10 +852,10 @@ class _UserRadarDot extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white,
           shape: BoxShape.circle,
-          border: Border.all(color: AppColors.primary, width: 4),
+          border: Border.all(color: tokensOf(context).primary, width: 4),
           boxShadow: [
             BoxShadow(
-                color: AppColors.primary.withValues(alpha: 0.5),
+                color: tokensOf(context).primary.withValues(alpha: 0.5),
                 blurRadius: 10,
                 offset: const Offset(0, 2)),
           ],
@@ -870,29 +870,32 @@ class _TripSummary extends StatelessWidget {
   final Ride ride;
 
   @override
-  Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpace.l),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _Linha(
-                icon: Icons.my_location_rounded,
-                color: AppColors.primary,
-                titulo: 'Embarque',
-                texto: ride.originAddress ?? 'Sua localizacao',
-              ),
-              const SizedBox(height: AppSpace.m),
-              _Linha(
-                icon: Icons.place_rounded,
-                color: AppColors.ink,
-                titulo: 'Destino',
-                texto: ride.destinationAddress ?? 'Destino escolhido',
-              ),
-            ],
-          ),
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpace.l),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _Linha(
+              icon: Icons.my_location_rounded,
+              color: t.primary,
+              titulo: 'Embarque',
+              texto: ride.originAddress ?? 'Sua localizacao',
+            ),
+            const SizedBox(height: AppSpace.m),
+            _Linha(
+              icon: Icons.place_rounded,
+              color: t.ink,
+              titulo: 'Destino',
+              texto: ride.destinationAddress ?? 'Destino escolhido',
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 }
 
 class _Linha extends StatelessWidget {
@@ -943,7 +946,9 @@ class _WhatHappensNext extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) => Column(
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text('O que acontece agora', style: AppType.title),
@@ -958,15 +963,15 @@ class _WhatHappensNext extends StatelessWidget {
                     width: 20,
                     height: 20,
                     alignment: Alignment.center,
-                    decoration: const BoxDecoration(
-                      color: AppColors.primarySoft,
+                    decoration: BoxDecoration(
+                      color: t.primarySoft,
                       shape: BoxShape.circle,
                     ),
                     child: Text('${i + 1}',
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
-                            color: AppColors.primary)),
+                            color: t.primary)),
                   ),
                   const SizedBox(width: AppSpace.m),
                   Expanded(
@@ -978,4 +983,6 @@ class _WhatHappensNext extends StatelessWidget {
             ),
         ],
       );
+}
+
 }

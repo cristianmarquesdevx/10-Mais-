@@ -16,6 +16,9 @@ dependencies:
   web: ^1.1.1
   shared_preferences: ^2.3.2
   geolocator: ^14.1.2
+  # Design system compartilhado (tokens, tipografia, componentes).
+  ten_design:
+    path: ../../packages/ten_design
   # Mapas/navegação: abstração MapProvider (R1) — deep link (MVP-A) e
   # navegação embutida (MVP-B) entram no módulo de mapas; o ponto de troca
   # já está isolado na tela em corrida.

@@ -326,6 +326,7 @@ class _DestinoScreenState extends State<DestinoScreen> {
   @override
   Widget build(BuildContext context) {
     final ride = AppScope.of(context);
+    final t = tokensOf(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Confirmar destino')),
       body: Column(children: [
@@ -362,7 +363,7 @@ class _DestinoScreenState extends State<DestinoScreen> {
                       padding: const EdgeInsets.only(top: AppSpace.xs),
                       child: Text(
                         _chosen!.label,
-                        style: AppType.label.copyWith(color: AppColors.primary),
+                        style: AppType.label.copyWith(color: t.primary),
                       ),
                     ),
                   // Endereço sem número não vira pedido: o CTA fica travado
@@ -371,8 +372,8 @@ class _DestinoScreenState extends State<DestinoScreen> {
                     Padding(
                       padding: const EdgeInsets.only(top: AppSpace.xs),
                       child: Row(children: [
-                        const Icon(Icons.info_outline,
-                            size: 14, color: AppColors.warning),
+                        Icon(Icons.info_outline,
+                            size: 14, color: t.warning),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
@@ -396,12 +397,12 @@ class _DestinoScreenState extends State<DestinoScreen> {
                       // Material próprio: ListTile pinta fundo/ripple no Material
                       // ancestral — sem ele o Flutter lança exceção de renderização.
                       child: Material(
-                        color: AppColors.surface,
+                        color: t.surface,
                         shape: RoundedRectangleBorder(
                           borderRadius:
                               BorderRadius.circular(AppSpace.radiusCard),
                           side: BorderSide(
-                              color: AppColors.hairline.withValues(alpha: 0.4)),
+                              color: t.hairline.withValues(alpha: 0.4)),
                         ),
                         clipBehavior: Clip.antiAlias,
                         child: ListView.builder(
@@ -412,8 +413,8 @@ class _DestinoScreenState extends State<DestinoScreen> {
                             final p = _suggestions[i];
                             return ListTile(
                               dense: true,
-                              leading: const Icon(Icons.location_on_outlined,
-                                  color: AppColors.primary, size: 20),
+                              leading: Icon(Icons.location_on_outlined,
+                                  color: t.primary, size: 20),
                               title: Text(p.label,
                                   maxLines: 2, overflow: TextOverflow.ellipsis),
                               onTap: () => _pick(p),
@@ -452,7 +453,7 @@ class _DestinoScreenState extends State<DestinoScreen> {
                             : Icons.route_rounded,
                         size: 16,
                         color:
-                            _rota!.approx ? AppColors.muted : AppColors.earn),
+                            _rota!.approx ? t.muted : t.earn),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
@@ -511,10 +512,10 @@ class _DestinoScreenState extends State<DestinoScreen> {
             padding: const EdgeInsets.fromLTRB(
                 AppSpace.l, AppSpace.m, AppSpace.l, AppSpace.m),
             decoration: BoxDecoration(
-              color: AppColors.surface,
+              color: t.surface,
               border: Border(
                   top:
-                      BorderSide(color: AppColors.ink.withValues(alpha: 0.06))),
+                      BorderSide(color: t.ink.withValues(alpha: 0.06))),
             ),
             child: FilledButton(
               onPressed: _sending || _chosen == null || !_chosen!.hasNumber
@@ -552,25 +553,26 @@ class _PricingCard extends StatelessWidget {
         ? (quote!.expiresAt.difference(DateTime.now()).inSeconds).clamp(0, 999)
         : 0;
     final expiring = has && secs <= 15;
+    final t = tokensOf(context);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpace.l),
       decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.08),
+        color: t.primary.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(AppSpace.radiusCard),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+        border: Border.all(color: t.primary.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            const Icon(Icons.savings_outlined, color: AppColors.earn, size: 18),
+            Icon(Icons.savings_outlined, color: t.earn, size: 18),
             const SizedBox(width: 6),
-            const Text('Valor no momento',
+            Text('Valor no momento',
                 style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
-                    color: AppColors.earn)),
+                    color: t.earn)),
             const Spacer(),
             if (quoting && !has)
               const SizedBox(
@@ -582,7 +584,7 @@ class _PricingCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(
                     horizontal: AppSpace.s, vertical: 2),
                 decoration: BoxDecoration(
-                  color: (expiring ? AppColors.warning : AppColors.primary)
+                  color: (expiring ? t.warning : t.primary)
                       .withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(AppSpace.radiusChip),
                 ),
@@ -591,7 +593,7 @@ class _PricingCard extends StatelessWidget {
                   style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
-                      color: expiring ? AppColors.warning : AppColors.earn),
+                      color: expiring ? t.warning : t.earn),
                 ),
               ),
           ]),
@@ -653,6 +655,7 @@ class _OriginBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = tokensOf(context);
     if (loading) {
       return Row(children: [
         const SizedBox(
@@ -667,8 +670,8 @@ class _OriginBanner extends StatelessWidget {
     }
     if (fromDevice) {
       return Row(children: [
-        const Icon(Icons.my_location_rounded,
-            size: 15, color: AppColors.primary),
+        Icon(Icons.my_location_rounded,
+            size: 15, color: t.primary),
         const SizedBox(width: 6),
         Expanded(
           child: Text('Embarque na sua localização atual',
@@ -687,13 +690,13 @@ class _OriginBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: AppColors.warning.withValues(alpha: 0.10),
+        color: t.warning.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(AppSpace.radiusCard),
-        border: Border.all(color: AppColors.warning.withValues(alpha: 0.35)),
+        border: Border.all(color: t.warning.withValues(alpha: 0.35)),
       ),
       child: Row(children: [
-        const Icon(Icons.location_off_outlined,
-            size: 15, color: AppColors.warning),
+        Icon(Icons.location_off_outlined,
+            size: 15, color: t.warning),
         const SizedBox(width: 6),
         Expanded(
           child: Text(

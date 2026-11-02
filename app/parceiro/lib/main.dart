@@ -51,16 +51,6 @@ class _ParceiroAppState extends State<ParceiroApp> {
     if (mounted) setState(() => _themeLoaded = true);
   }
 
-  ThemeMode _toFrameworkThemeMode(ThemeModePref mode) {
-    switch (mode) {
-      case ThemeModePref.light:
-        return ThemeMode.light;
-      case ThemeModePref.dark:
-        return ThemeMode.dark;
-      case ThemeModePref.system:
-        return ThemeMode.system;
-    }
-  }
 
   @override
   void dispose() {
@@ -91,7 +81,9 @@ class _ParceiroAppState extends State<ParceiroApp> {
           debugShowCheckedModeBanner: false,
           theme: buildLightTheme(),
           darkTheme: buildDarkTheme(),
-          themeMode: _toFrameworkThemeMode(mode),
+          // O modo vem do seletor do Perfil (e do valor salvo). Fixar
+          // ThemeMode.light aqui desligava o tema escuro no app inteiro.
+          themeMode: mode.materialMode,
           // Ícones da barra de status e de navegação acompanham o tema,
           // para não ficarem claros sobre o fundo claro.
           builder: (context, child) {

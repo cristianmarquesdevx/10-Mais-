@@ -72,6 +72,7 @@ class _CarteiraScreenState extends State<CarteiraScreen> {
   @override
   Widget build(BuildContext context) {
     final w = _wallet;
+    final t = tokensOf(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Carteira')),
       body: w == null && _error == null
@@ -99,7 +100,7 @@ class _CarteiraScreenState extends State<CarteiraScreen> {
                               'Dívida: ${brl(w.debtCents / 100)} — novas corridas '
                               'em DINHEIRO ficam bloqueadas até quitar (ADR-003). '
                               'PIX/cartão continuam liberados.',
-                              style: const TextStyle(color: AppColors.warning),
+                              style: TextStyle(color: t.warning),
                             ),
                           ],
                         ],
@@ -118,7 +119,7 @@ class _CarteiraScreenState extends State<CarteiraScreen> {
                           'offline' => 'Sem conexão — tente de novo.',
                           _ => 'Erro: $_error',
                         },
-                        style: const TextStyle(color: AppColors.danger),
+                        style: TextStyle(color: t.danger),
                       ),
                     ),
                   FilledButton.icon(
@@ -152,8 +153,8 @@ class _CarteiraScreenState extends State<CarteiraScreen> {
                                   ? Icons.add_circle_outline
                                   : Icons.remove_circle_outline,
                               color: e.direction == 'C'
-                                  ? AppColors.earn
-                                  : AppColors.warning,
+                                  ? t.earn
+                                  : t.warning,
                             ),
                             title: Text(e.description,
                                 style: AppType.body.copyWith(fontSize: 14)),
@@ -163,8 +164,8 @@ class _CarteiraScreenState extends State<CarteiraScreen> {
                               style: TextStyle(
                                 fontWeight: FontWeight.w700,
                                 color: e.direction == 'C'
-                                    ? AppColors.earn
-                                    : AppColors.ink,
+                                    ? t.earn
+                                    : t.ink,
                                 fontFeatures: const [
                                   FontFeature.tabularFigures()
                                 ],

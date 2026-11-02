@@ -54,15 +54,17 @@ class _PerfilScreenState extends State<PerfilScreen> {
 
   Future<void> _setTheme(ThemeModePref mode) async {
     await ThemePrefs.setMode(mode);
+    // Avisa o app inteiro na hora (antes só valia ao reabrir).
+    themeModeNotifier.value = mode;
     if (mounted) setState(() => _themeMode = mode);
   }
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context);
+    final t = tokensOf(context);
 
     return Scaffold(
-      backgroundColor: t.colorScheme.surface,
+      backgroundColor: t.surface,
       appBar: AppBar(
         title: Text('Perfil', style: titleStyle(context)),
       ),
@@ -71,9 +73,11 @@ class _PerfilScreenState extends State<PerfilScreen> {
         children: [
           // Identidade
           Card(
-            color: t.colorScheme.surface,
+            color: t.surface,
             child: ListTile(
-              leading: const CircleAvatar(child: Icon(Icons.person)),
+              leading: CircleAvatar(
+                child: Icon(Icons.person, color: t.primary),
+              ),
               title: Text(
                 _me?.fullName ??
                     _me?.userId ??
@@ -130,9 +134,14 @@ class _PerfilScreenState extends State<PerfilScreen> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: t.primary,
+                  side: BorderSide(color: t.primary),
+                ),
                 onPressed: () => Navigator.pushNamed(context, '/perfil-setup'),
-                icon: const Icon(Icons.edit, size: 18),
-                label: const Text('EDITAR CADASTRO'),
+                icon: Icon(Icons.edit, size: 18, color: t.primary),
+                label: Text('EDITAR CADASTRO',
+                    style: TextStyle(color: t.primary, fontWeight: FontWeight.w600)),
               ),
             ),
             const SizedBox(height: AppSpace.l),
@@ -141,54 +150,65 @@ class _PerfilScreenState extends State<PerfilScreen> {
           // Tema
           Text('Aparência', style: titleStyle(context)),
           const SizedBox(height: AppSpace.s),
-          Card(
-            color: t.colorScheme.surface,
-            child: RadioGroup<ThemeModePref>(
-              groupValue: _themeMode,
-              onChanged: (v) {
-                if (v != null) _setTheme(v);
-              },
-              child: Column(
-                children: [
-                  _themeTile(
-                    icon: Icons.brightness_high,
-                    title: 'Claro',
-                    subtitle: 'Sempre em cores claras',
-                    value: ThemeModePref.light,
-                    onChanged: _setTheme,
-                  ),
-                  const Divider(height: 1),
-                  _themeTile(
-                    icon: Icons.brightness_low,
-                    title: 'Escuro',
-                    subtitle: 'Sempre em cores escuras',
-                    value: ThemeModePref.dark,
-                    onChanged: _setTheme,
-                  ),
-                  const Divider(height: 1),
-                  _themeTile(
-                    icon: Icons.device_unknown,
-                    title: 'Seguir o sistema',
-                    subtitle: 'Usa a configuração do celular',
-                    value: ThemeModePref.system,
-                    onChanged: _setTheme,
-                  ),
-                ],
+          _Section(
+            context: context,
+            title: 'Aparência',
+            children: [
+              RadioGroup<ThemeModePref>(
+                groupValue: _themeMode,
+                onChanged: (v) {
+                  if (v != null) _setTheme(v);
+                },
+                child: Column(
+                  children: [
+                    _themeTile(
+                      context: context,
+                      icon: Icons.brightness_high,
+                      title: 'Claro',
+                      subtitle: 'Sempre em cores claras',
+                      value: ThemeModePref.light,
+                      onChanged: _setTheme,
+                    ),
+                    const Divider(height: 1),
+                    _themeTile(
+                      context: context,
+                      icon: Icons.brightness_low,
+                      title: 'Escuro',
+                      subtitle: 'Sempre em cores escuras',
+                      value: ThemeModePref.dark,
+                      onChanged: _setTheme,
+                    ),
+                    const Divider(height: 1),
+                    _themeTile(
+                      context: context,
+                      icon: Icons.device_unknown,
+                      title: 'Seguir o sistema',
+                      subtitle: 'Usa a configuração do celular',
+                      value: ThemeModePref.system,
+                      onChanged: _setTheme,
+                    ),
+                  ],
+                ),
               ),
-            ),
+            ],
           ),
           const SizedBox(height: AppSpace.l),
 
           // Raspadinha de Prêmios e convites (3.8)
           _Section(
+            context: context,
             title: 'Ganhe mais',
             children: [
-              _entry(Icons.card_giftcard, 'Raspadinha de prêmios', () {
+              _entry(context, Icons.card_giftcard, 'Raspadinha de prêmios', () {
                 Navigator.pushNamed(context, '/scratch-campaigns');
               }),
-              _entry(Icons.person_add_alt_1_outlined, 'Convide motoristas', () {
-                Navigator.pushNamed(context, '/invite');
-              }),
+              _entry(
+                  context,
+                  Icons.person_add_alt_1_outlined,
+                  'Convide motoristas',
+                  () {
+                    Navigator.pushNamed(context, '/invite');
+                  }),
             ],
           ),
           const SizedBox(height: AppSpace.xl),
@@ -197,7 +217,7 @@ class _PerfilScreenState extends State<PerfilScreen> {
           Text('Privacidade (LGPD)', style: titleStyle(context)),
           const SizedBox(height: AppSpace.s),
           Card(
-            color: t.colorScheme.surface,
+            color: t.surface,
             child: Column(children: [
               SwitchListTile(
                 value: true,
@@ -231,33 +251,40 @@ class _PerfilScreenState extends State<PerfilScreen> {
     );
   }
 
-  static Widget _entry(IconData icon, String label, VoidCallback onTap) =>
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(icon, color: AppColors.primary),
-        title: Text(label,
-            style: const TextStyle(fontSize: 15, color: AppColors.ink)),
-        trailing:
-            const Icon(Icons.chevron_right, color: AppColors.onGraphiteMuted),
-        onTap: onTap,
-      );
+  static Widget _entry(
+    BuildContext context,
+    IconData icon,
+    String label,
+    VoidCallback onTap,
+  ) {
+    final t = tokensOf(context);
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon, color: t.primary),
+      title: Text(label, style: TextStyle(fontSize: 15, color: t.ink)),
+      trailing: Icon(Icons.chevron_right, color: t.muted),
+      onTap: onTap,
+    );
+  }
 
   static Widget _themeTile({
+    required BuildContext context,
     required IconData icon,
     required String title,
     required String subtitle,
     required ThemeModePref value,
     required ValueChanged<ThemeModePref> onChanged,
   }) {
+    final t = tokensOf(context);
     return ListTile(
-      leading: Icon(icon, color: AppColors.primary),
+      leading: Icon(icon, color: t.primary),
       title: Text(title,
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-      subtitle: Text(subtitle, style: const TextStyle(fontSize: 13)),
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: t.ink)),
+      subtitle: Text(subtitle, style: TextStyle(fontSize: 13, color: t.muted)),
       // Sem groupValue/onChanged: quem agrupa é o RadioGroup acima.
       trailing: Radio<ThemeModePref>(
         value: value,
-        activeColor: AppColors.primary,
+        activeColor: t.primary,
       ),
       onTap: () => onChanged(value),
     );
@@ -265,13 +292,18 @@ class _PerfilScreenState extends State<PerfilScreen> {
 }
 
 class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.children});
+  const _Section({
+    required this.context,
+    required this.title,
+    required this.children,
+  });
+  final BuildContext context;
   final String title;
   final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context);
+    final t = tokensOf(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -279,14 +311,15 @@ class _Section extends StatelessWidget {
             style: TextStyle(
                 fontSize: 12,
                 letterSpacing: 1,
-                color: t.colorScheme.onSurfaceVariant,
+                color: t.muted,
                 fontWeight: FontWeight.w600)),
         const SizedBox(height: AppSpace.s),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: AppSpace.l),
           decoration: BoxDecoration(
-            color: AppColors.graphite,
+            color: t.surface,
             borderRadius: BorderRadius.circular(AppSpace.radiusCard),
+            border: Border.all(color: t.hairline.withValues(alpha: 0.35)),
           ),
           child: Column(children: children),
         ),

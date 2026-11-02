@@ -1,0 +1,18 @@
+name: ten_design
+description: "Design system do 10 é + — tokens teal, tipografia, espaçamento e componentes compartilhados entre os apps."
+publish_to: "none"
+version: 0.1.0
+
+# Dart exige que o nome do pacote comece com letra: `10e_design` é inválido.
+# "ten" é o 10 da marca e é o único ponto de troca caso o nome mude.
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0

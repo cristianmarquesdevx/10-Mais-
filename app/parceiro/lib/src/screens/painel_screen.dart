@@ -297,7 +297,7 @@ class _StatusPill extends StatelessWidget {
       case PartnerStatus.online:
         return t.primary;
       case PartnerStatus.paused:
-        return const Color(0xFFD99A1B);
+        return t.warning;
       case PartnerStatus.emCorrida:
         return t.earn;
       case PartnerStatus.offline:
@@ -374,8 +374,7 @@ class _HeatPill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
       decoration: _floatingDecoration(context, radius: AppSpace.radiusChip),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.local_fire_department,
-            color: Color(0xFFFF6B35), size: 16),
+        Icon(Icons.local_fire_department, color: t.warning, size: 16),
         const SizedBox(width: 4),
         Text('$count zonas quentes',
             style: TextStyle(
@@ -663,7 +662,7 @@ class _KycGate extends StatelessWidget {
               horizontal: AppSpace.m, vertical: AppSpace.s),
           decoration: _floatingDecoration(context),
           child: Row(children: [
-            const Icon(Icons.lock_outline, color: Color(0xFFD99A1B), size: 20),
+            Icon(Icons.lock_outline, color: t.warning, size: 20),
             const SizedBox(width: AppSpace.s),
             Expanded(
               child: Column(
