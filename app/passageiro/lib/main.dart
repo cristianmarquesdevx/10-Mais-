@@ -26,9 +26,6 @@ class _PassageiroAppState extends State<PassageiroApp> {
   late final RideController _ride;
   bool _signedIn = false; // P1: tela de apresentação/login antes da home
 
-  // Tema
-  bool _themeLoaded = false;
-
   @override
   void initState() {
     super.initState();
@@ -39,6 +36,8 @@ class _PassageiroAppState extends State<PassageiroApp> {
     _api = ApiClient(baseUrl: fromEnv, accessToken: () => token);
     _ride = RideController(_api);
     _ride.refresh(); // corrida ativa ao abrir o app (deep link F4)
+    // Mostra o login imediatamente para evitar tela branca durante o carregamento do tema.
+    // O tema continua carregando em segundo plano.
     _loadTheme();
   }
 
@@ -47,9 +46,7 @@ class _PassageiroAppState extends State<PassageiroApp> {
     // O Perfil escreve neste notifier ao trocar de tema; aqui só semeia o
     // valor salvo, para o app abrir já no modo escolhido.
     themeModeNotifier.value = mode;
-    if (mounted) setState(() => _themeLoaded = true);
   }
-
 
   @override
   void dispose() {
@@ -59,15 +56,8 @@ class _PassageiroAppState extends State<PassageiroApp> {
 
   @override
   Widget build(BuildContext context) {
-    // Enquanto o tema não carrega, exibe tela neutra para evitar "flash" de tema.
-    if (!_themeLoaded) {
-      return const MaterialApp(
-        home: Scaffold(
-          body: Center(child: CircularProgressIndicator()),
-        ),
-      );
-    }
-
+    // Mostra o login imediatamente para evitar tela branca durante o carregamento do tema.
+    // O tema continua carregando em segundo plano.
     return AppScope(
       ride: _ride,
       api: _api,
@@ -83,48 +73,47 @@ class _PassageiroAppState extends State<PassageiroApp> {
           // O modo vem do seletor do Perfil (e do valor salvo). Fixar
           // ThemeMode.light aqui desligava o tema escuro no app inteiro.
           themeMode: mode.materialMode,
-        // Ícones da barra de status/navegação acompanham o tema; o login
-        // escuro sobrescreve com o próprio AnnotatedRegion.
-        builder: (context, child) {
-          final dark = Theme.of(context).brightness == Brightness.dark;
-          return AnnotatedRegion<SystemUiOverlayStyle>(
-            value:
-                (dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
-                    .copyWith(
-              statusBarColor: Colors.transparent,
-              systemNavigationBarColor:
-                  dark ? AppColorsDark.background : AppColors.surface,
-              systemNavigationBarIconBrightness:
-                  dark ? Brightness.light : Brightness.dark,
-            ),
-            child: child ?? const SizedBox.shrink(),
-          );
-        },
-        home: _signedIn
-            ? const HomeScreen()
-            : LoginScreen(
-                onDone: () => setState(() => _signedIn = true),
+          // Ícones da barra de status/navegação acompanham o tema; o login
+          // escuro sobrescreve com o próprio AnnotatedRegion.
+          builder: (context, child) {
+            final dark = Theme.of(context).brightness == Brightness.dark;
+            return AnnotatedRegion<SystemUiOverlayStyle>(
+              value: (dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+                  .copyWith(
+                statusBarColor: Colors.transparent,
+                systemNavigationBarColor:
+                    dark ? AppColorsDark.background : AppColors.surface,
+                systemNavigationBarIconBrightness:
+                    dark ? Brightness.light : Brightness.dark,
               ),
-        routes: {
-          '/destino': (_) => const DestinoScreen(),
-          '/negociar': (_) => const NegociarScreen(),
-          '/fila': (_) => const FilaScreen(),
-          '/acompanhar': (_) => const AcompanharScreen(),
-          '/viagem': (_) => const ViagemScreen(),
-          '/pagamento': (_) => const PagamentoScreen(),
-          '/avaliar': (_) => const AvaliarScreen(),
-          '/historico': (_) => const HistoricoScreen(),
-          '/perfil': (_) => const PerfilScreen(),
-          '/perfil-setup': (_) => const ProfileSetupScreen(),
-          '/scratch-campaigns': (_) => const ScratchCampaignsScreen(),
-          '/scratch-play': (_) => const ScratchPlayScreen(),
-          '/scratch-history': (_) => const ScratchHistoryScreen(),
-          '/invite': (_) => const InviteScreen(),
-        },
+              child: child ?? const SizedBox.shrink(),
+            );
+          },
+          home: _signedIn
+              ? const HomeScreen()
+              : LoginScreen(
+                  onDone: () => setState(() => _signedIn = true),
+                ),
+          routes: {
+            '/destino': (_) => const DestinoScreen(),
+            '/negociar': (_) => const NegociarScreen(),
+            '/fila': (_) => const FilaScreen(),
+            '/acompanhar': (_) => const AcompanharScreen(),
+            '/viagem': (_) => const ViagemScreen(),
+            '/pagamento': (_) => const PagamentoScreen(),
+            '/avaliar': (_) => const AvaliarScreen(),
+            '/historico': (_) => const HistoricoScreen(),
+            '/perfil': (_) => const PerfilScreen(),
+            '/perfil-setup': (_) => const ProfileSetupScreen(),
+            '/scratch-campaigns': (_) => const ScratchCampaignsScreen(),
+            '/scratch-play': (_) => const ScratchPlayScreen(),
+            '/scratch-history': (_) => const ScratchHistoryScreen(),
+            '/invite': (_) => const InviteScreen(),
+          },
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 }
 
 /// InheritedNotifier: telas escutam o RideController sem package extra.

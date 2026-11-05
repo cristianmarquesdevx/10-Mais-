@@ -238,9 +238,11 @@ class _BrandChip extends StatelessWidget {
       child: Row(children: [
         Icon(Icons.add, size: 16, color: t.primary),
         const SizedBox(width: 4),
-        Text('10 é +',
-            style: TextStyle(
-                fontWeight: FontWeight.w800, fontSize: 15, color: t.ink)),
+        Image.asset(
+          'assets/10-e-mais-logos/png/logo_icone.png',
+          height: 15,
+          errorBuilder: (_, __, ___) => Icon(Icons.verified, size: 15, color: t.primary),
+        ),
       ]),
     );
   }

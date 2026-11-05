@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../theme/theme.dart';
+import 'package:ten_design/ten_design.dart';
+import 'widgets/carousel_destaques.dart';
 
 /// P1 Apresentação + login (OTP F1): tela de abertura elegante do kit —
 /// fundo da marca, logo e proposta de valor; em seguida telefone → código
@@ -21,7 +23,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _phone = TextEditingController();
   final _otp = TextEditingController();
-  int _step = 0; // 0 = telefone, 1 = OTP
+  int _step = 0; // 0 = telefone, 2 = OTP
   bool _busy = false;
   String? _error;
 
@@ -67,6 +69,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       backgroundColor: t.background,
+      resizeToAvoidBottomInset: true,
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -118,20 +121,27 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               children: [
                 const SizedBox(height: AppSpace.xxl),
+                // Logo - versão clara para tema claro, branca para tema escuro
                 Image.asset(
                   dark
-                      ? 'assets/logo/logo_branco.png'
+                      ? 'assets/10-e-mais-logos/png/logo_branco.png'
                       // Versão da marca com fundo removido: a arte original
                       // tem fundo branco e desenhava um retângulo no halo.
-                      : 'assets/logo/logo_claro_alpha.png',
+                      : 'assets/10-e-mais-logos/png/logo_transparente.png',
                   height: 64,
-                  errorBuilder: (_, __, ___) => Text('10 é +',
-                      style: AppType.titleOnDark.copyWith(color: t.ink)),
+                  errorBuilder: (_, __, ___) =>
+                      Icon(Icons.verified, size: 56, color: t.primary),
                 ),
+                const SizedBox(height: AppSpace.s),
+                // Carrossel de login - posicionado logo abaixo da logo e acima do campo
+                // 5 imagens promocionais com auto-slide de 3s
+                const CarouselDestaques(),
                 const SizedBox(height: AppSpace.m),
-                Text('Seu volante. Seu dinheiro.',
-                    style: AppType.titleOnDark
-                        .copyWith(fontSize: 25, color: t.ink)),
+                Text(
+                  'Seu volante. Seu dinheiro.',
+                  style: AppType.titleOnDark
+                      .copyWith(fontSize: 25, color: t.ink),
+                ),
                 const SizedBox(height: AppSpace.s),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: AppSpace.xl),
@@ -166,7 +176,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-/// Card branco inferior com o formulário da etapa atual.
+/// Card branco/inferior com o formulário da etapa atual.
 class _AuthCard extends StatelessWidget {
   const _AuthCard({
     required this.step,

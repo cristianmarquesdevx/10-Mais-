@@ -31,4 +31,13 @@ flutter:
   uses-material-design: true
   # Kit de marca 10 é + (10-e-mais-HD/ otimizado p/ bundle ~1,5 MB).
   assets:
+    - assets/10-e-mais-logos/
+    - assets/10-e-mais-logos/png/
+    - assets/10-e-mais-logos/svg/
+    - assets/10-e-mais-carrossel-login/
+    - assets/10-e-mais-carrossel-login/png/
+    - assets/10-e-mais-carrossel-login/svg/
+    - assets/10-e-mais-carrossel-raspadinha/
+    - assets/10-e-mais-carrossel-raspadinha/png/
+    - assets/10-e-mais-carrossel-raspadinha/svg/
     - assets/kit/

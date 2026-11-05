@@ -69,11 +69,7 @@ class _ApresentacaoScreenState extends State<ApresentacaoScreen> {
                   filterQuality: FilterQuality.high,
                   semanticLabel: '10 é + — Rodar com vantagem',
                   errorBuilder: (_, __, ___) => const Center(
-                    child: Text('10 é +',
-                        style: TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF17211C))),
+                    child: Icon(Icons.add, color: Colors.white, size: 32),
                   ),
                 ),
               ),

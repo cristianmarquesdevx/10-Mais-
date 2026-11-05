@@ -67,15 +67,12 @@ class _VehicleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: AppColors.surface,
+      color: tokensOf(context).surface,
       borderRadius: BorderRadius.circular(AppSpace.radiusCard),
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(AppSpace.radiusCard),
-          border: Border.all(
-            color: selected
-                ? AppColors.primary
-                : AppColors.ink.withValues(alpha: 0.08),
+          border: Border.all(color: selected ? tokensOf(context).primary : tokensOf(context).ink.withValues(alpha: 0.08),
             width: selected ? 2 : 1,
           ),
         ),
@@ -108,7 +105,7 @@ class _VehicleCard extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(
                           horizontal: AppSpace.s, vertical: 2),
                       decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.15),
+                        color: tokensOf(context).primary.withValues(alpha: 0.15),
                         borderRadius:
                             BorderRadius.circular(AppSpace.radiusChip),
                       ),
@@ -129,7 +126,7 @@ class _VehicleCard extends StatelessWidget {
             selected
                 ? Icons.radio_button_checked
                 : Icons.radio_button_unchecked,
-            color: selected ? AppColors.primary : AppColors.hairline,
+            color: selected ? tokensOf(context).primary : tokensOf(context).hairline,
           ),
         ]),
       ),

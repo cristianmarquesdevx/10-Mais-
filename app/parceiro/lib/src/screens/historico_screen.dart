@@ -27,16 +27,16 @@ class _HistoricoScreenState extends State<HistoricoScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: tokensOf(context).background,
       body: SafeArea(
         child: FutureBuilder<List<Ride>>(
           future: _rides,
           builder: (context, snap) {
             if (snap.connectionState != ConnectionState.done) {
-              return const Center(child: CircularProgressIndicator());
+              return Center(child: CircularProgressIndicator());
             }
             if (snap.hasError) {
-              return const Center(
+              return Center(
                 child: Padding(
                   padding: EdgeInsets.all(AppSpace.xl),
                   child: Text(
@@ -49,11 +49,11 @@ class _HistoricoScreenState extends State<HistoricoScreen> {
             }
             final rides = snap.data ?? const <Ride>[];
             if (rides.isEmpty) {
-              return const Center(
+              return Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.history, size: 48, color: AppColors.hairline),
+                    Icon(Icons.history, size: 48, color: tokensOf(context).hairline),
                     SizedBox(height: AppSpace.m),
                     Text('Suas corridas aparecem aqui', style: AppType.title),
                     SizedBox(height: AppSpace.xs),
@@ -69,7 +69,7 @@ class _HistoricoScreenState extends State<HistoricoScreen> {
               separatorBuilder: (_, __) => const SizedBox(height: AppSpace.m),
               itemBuilder: (context, i) {
                 if (i == 0) {
-                  return const Text('Histórico de corridas',
+                  return Text('Histórico de corridas',
                       style: AppType.title);
                 }
                 return _RideTile(ride: rides[i - 1]);
@@ -91,7 +91,7 @@ class _RideTile extends StatelessWidget {
     final done = ride.status == RideStatus.finalizada;
     final fare = ride.fareTotal ?? ride.proposedAmount;
     return Material(
-      color: AppColors.surface,
+      color: tokensOf(context).surface,
       borderRadius: BorderRadius.circular(AppSpace.radiusCard),
       child: Padding(
         padding: const EdgeInsets.all(AppSpace.l),
@@ -100,13 +100,13 @@ class _RideTile extends StatelessWidget {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: (done ? AppColors.primary : AppColors.hairline)
+              color: (done ? tokensOf(context).primary : tokensOf(context).hairline)
                   .withValues(alpha: 0.15),
               shape: BoxShape.circle,
             ),
             child: Icon(
               done ? Icons.check : Icons.close,
-              color: done ? AppColors.earn : AppColors.muted,
+              color: done ? tokensOf(context).earn : tokensOf(context).muted,
             ),
           ),
           const SizedBox(width: AppSpace.m),
@@ -118,7 +118,7 @@ class _RideTile extends StatelessWidget {
                   ride.destinationAddress ?? ride.originAddress ?? 'Corrida',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontWeight: FontWeight.w600, fontSize: 15),
                 ),
                 const SizedBox(height: 2),
@@ -133,10 +133,11 @@ class _RideTile extends StatelessWidget {
           Text(
             fare != null ? brl(fare) : '—',
             style: AppType.money.copyWith(
-                fontSize: 16, color: done ? AppColors.ink : AppColors.muted),
+                fontSize: 16, color: done ? tokensOf(context).ink : tokensOf(context).muted),
           ),
-        ]),
+        ],
       ),
+    ),
     );
   }
 

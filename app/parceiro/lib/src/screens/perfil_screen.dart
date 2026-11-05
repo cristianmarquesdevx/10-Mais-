@@ -78,11 +78,20 @@ class _PerfilScreenState extends State<PerfilScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Parceiro 10 é +',
-                          style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: t.onGraphite)),
+                      Row(children: [
+                        Image.asset(
+                          'assets/10-e-mais-logos/png/logo_icone.png',
+                          height: 16,
+                          errorBuilder: (_, __, ___) =>
+                              const Icon(Icons.verified, size: 16),
+                        ),
+                        const SizedBox(width: 4),
+                        Text('Parceiro',
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: t.onGraphite)),
+                      ]),
                       const SizedBox(height: 2),
                       Text(
                         kyc ? 'Conta verificada' : 'KYC em análise',

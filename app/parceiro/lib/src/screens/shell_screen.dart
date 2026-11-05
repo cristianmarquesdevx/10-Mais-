@@ -130,19 +130,26 @@ class _PartnerDrawer extends StatelessWidget {
               child: Row(children: [
                 Image.asset(
                   dark
-                      ? 'assets/logo/logo_branco.png'
-                      : 'assets/logo/logo_claro_alpha.png',
+                      ? 'assets/10-e-mais-logos/png/logo_branco.png'
+                      : 'assets/10-e-mais-logos/png/logo_transparente.png',
                   height: 36,
-                  errorBuilder: (_, __, ___) => Text('10 é +',
-                      style: AppType.titleOnDark.copyWith(color: t.ink)),
+                  errorBuilder: (_, __, ___) =>
+                      const Icon(Icons.verified, size: 32),
                 ),
                 const SizedBox(width: AppSpace.m),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Parceiro 10 é +',
-                          style: AppType.onDark.copyWith(color: t.ink)),
+                      Row(children: [
+                        Image.asset('assets/10-e-mais-logos/png/logo_icone.png',
+                            height: 16,
+                            errorBuilder: (_, __, ___) =>
+                                const Icon(Icons.verified, size: 16)),
+                        const SizedBox(width: 4),
+                        Text('Parceiro',
+                            style: AppType.onDark.copyWith(color: t.ink)),
+                      ]),
                       Text(
                         kyc ? 'Conta verificada' : 'KYC em análise',
                         style: AppType.label.copyWith(

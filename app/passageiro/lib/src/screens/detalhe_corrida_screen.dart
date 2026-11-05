@@ -48,10 +48,10 @@ class DetalheCorridaScreen extends StatelessWidget {
     final d = ride.destination;
     final km = ride.distanceKm;
     final cor = ride.status.isCancelled
-        ? AppColors.danger
+        ? tokensOf(context).danger
         : ride.status == RideStatus.finalizada
-            ? AppColors.earn
-            : AppColors.primary;
+            ? tokensOf(context).earn
+            : tokensOf(context).primary;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Detalhes da corrida')),
@@ -81,15 +81,15 @@ class DetalheCorridaScreen extends StatelessWidget {
               ),
               if (ride.originAddress != null)
                 ListTile(
-                  leading: const Icon(Icons.trip_origin,
-                      size: 18, color: AppColors.muted),
+                  leading: Icon(Icons.trip_origin,
+                      size: 18, color: tokensOf(context).muted),
                   title: const Text('Origem'),
                   subtitle: Text(ride.originAddress!),
                 ),
               if (ride.destinationAddress != null)
                 ListTile(
-                  leading: const Icon(Icons.flag_outlined,
-                      size: 18, color: AppColors.primary),
+                  leading: Icon(Icons.flag_outlined,
+                      size: 18, color: tokensOf(context).primary),
                   title: const Text('Destino'),
                   subtitle: Text(ride.destinationAddress!),
                 ),
@@ -101,13 +101,13 @@ class DetalheCorridaScreen extends StatelessWidget {
               if (km != null)
                 ListTile(
                   leading:
-                      const Icon(Icons.route_outlined, color: AppColors.primary),
+                      Icon(Icons.route_outlined, color: tokensOf(context).primary),
                   title: const Text('Distância'),
                   trailing: Text(RouteResult.kmLabel(km), style: AppType.label),
                 ),
               ListTile(
-                leading: const Icon(Icons.payments_outlined,
-                    color: AppColors.primary),
+                leading: Icon(Icons.payments_outlined,
+                    color: tokensOf(context).primary),
                 title: const Text('Total'),
                 trailing: Text(
                   ride.fareTotal != null ? brl(ride.fareTotal!) : '—',
@@ -115,16 +115,16 @@ class DetalheCorridaScreen extends StatelessWidget {
                 ),
               ),
               ListTile(
-                leading: const Icon(Icons.verified_outlined,
-                    color: AppColors.primary),
+                leading: Icon(Icons.verified_outlined,
+                    color: tokensOf(context).primary),
                 title: const Text('Pagamento'),
                 trailing: Text(_pagamento(ride.paymentStatus),
                     style: AppType.label),
               ),
               if (ride.partnerName != null)
                 ListTile(
-                  leading: const Icon(Icons.person_outline,
-                      color: AppColors.primary),
+                  leading: Icon(Icons.person_outline,
+                      color: tokensOf(context).primary),
                   title: const Text('Parceiro'),
                   subtitle: Text([
                     ride.partnerName!,
@@ -146,10 +146,10 @@ class DetalheCorridaScreen extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(
                     AppSpace.l, AppSpace.m, AppSpace.l, AppSpace.m),
                 decoration: BoxDecoration(
-                  color: AppColors.surface,
+                  color: tokensOf(context).surface,
                   border: Border(
                       top: BorderSide(
-                          color: AppColors.ink.withValues(alpha: 0.06))),
+                          color: tokensOf(context).ink.withValues(alpha: 0.06))),
                 ),
                 child: FilledButton.icon(
                   onPressed: () => _repetir(context),

@@ -513,11 +513,17 @@ void main() {
     final (widget: app, ride: ride) = buildApp();
     // Apresentação fica antes da home: monta o gate como o main real.
     await tester.pumpWidget(_LoginGate(inner: app));
-    expect(find.text('Pra onde?'), findsOneWidget);
+    // O login abre com a logo da marca + carrossel de campanha.
+    expect(find.byType(Image), findsWidgets);
     expect(find.text('Entrar ou criar conta'), findsOneWidget);
     expect(find.text('Para onde?'), findsNothing);
 
     await tester.enterText(find.byType(TextField).first, '69999999999');
+    await tester.tap(find.text('CONTINUAR'));
+    await tester.pump();
+    // Login em duas etapas: celular → email → código.
+    expect(find.text('Email'), findsWidgets);
+    await tester.enterText(find.byType(TextField), 'teste@dezemais.app');
     await tester.tap(find.text('CONTINUAR'));
     await tester.pump();
     expect(find.text('Código de verificação'), findsOneWidget);

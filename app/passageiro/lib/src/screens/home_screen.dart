@@ -64,17 +64,12 @@ class _TopBar extends StatelessWidget {
               boxShadow: dark ? appShadowDark() : appShadow,
             ),
             child: Image.asset(
-              'assets/kit/logo_completo.png',
+              dark
+                  ? 'assets/10-e-mais-logos/png/logo_branco.png'
+                  : 'assets/10-e-mais-logos/png/logo_transparente.png',
               height: 28,
-              errorBuilder: (_, __, ___) => Row(children: [
-                Icon(Icons.add, color: t.primary, size: 18),
-                const SizedBox(width: 4),
-                Text('10 é +',
-                    style: TextStyle(
-                        color: t.ink,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16)),
-              ]),
+              errorBuilder: (_, __, ___) =>
+                  Icon(Icons.verified, color: t.primary, size: 22),
             ),
           ),
           const Spacer(),

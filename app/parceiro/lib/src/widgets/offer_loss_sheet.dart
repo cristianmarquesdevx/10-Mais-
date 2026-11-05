@@ -17,7 +17,7 @@ Future<void> showOfferLossSheet(BuildContext context, OfferLoss loss) {
 }
 
 class _OfferLossSheet extends StatelessWidget {
-  const _OfferLossSheet({required this.loss});
+  _OfferLossSheet({required this.loss});
 
   final OfferLoss loss;
 
@@ -27,13 +27,18 @@ class _OfferLossSheet extends StatelessWidget {
     final before = loss.acceptanceRateBefore;
     final after = loss.acceptanceRate;
     return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
+      decoration: BoxDecoration(
+        color: tokensOf(context).surface,
         borderRadius: BorderRadius.vertical(
-            top: Radius.circular(AppSpace.radiusSheet)),
+          top: Radius.circular(AppSpace.radiusSheet),
+        ),
       ),
-      padding: const EdgeInsets.fromLTRB(
-          AppSpace.l, AppSpace.s, AppSpace.l, AppSpace.l),
+      padding: EdgeInsets.fromLTRB(
+        AppSpace.l,
+        AppSpace.s,
+        AppSpace.l,
+        AppSpace.l,
+      ),
       child: SafeArea(
         top: false,
         child: Column(
@@ -44,9 +49,9 @@ class _OfferLossSheet extends StatelessWidget {
               child: Container(
                 width: 36,
                 height: 4,
-                margin: const EdgeInsets.only(bottom: AppSpace.m),
+                margin: EdgeInsets.only(bottom: AppSpace.m),
                 decoration: BoxDecoration(
-                  color: AppColors.hairline.withValues(alpha: 0.6),
+                  color: tokensOf(context).hairline.withValues(alpha: 0.6),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -68,13 +73,15 @@ class _OfferLossSheet extends StatelessWidget {
                   ? 'Você tinha ${loss.timeoutS ?? 15} s para responder — a '
                       'corrida já foi para o próximo da fila.'
                   : 'A corrida já foi para o próximo da fila.',
-              style: const TextStyle(color: AppColors.muted, fontSize: 13),
+              style: TextStyle(color: AppColors.muted, fontSize: 13),
             ),
             const SizedBox(height: AppSpace.l),
             // --- quanto deixou de ganhar ---
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpace.m, vertical: AppSpace.m),
+              padding: EdgeInsets.symmetric(
+                horizontal: AppSpace.m,
+                vertical: AppSpace.m,
+              ),
               decoration: BoxDecoration(
                 color: AppColors.danger.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(AppSpace.radiusCard),
@@ -82,7 +89,7 @@ class _OfferLossSheet extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Você deixou de ganhar',
+                  Text('Você deixou de ganhar',
                       style: TextStyle(fontSize: 12, color: AppColors.muted)),
                   Text(brl(loss.lostAmount), style: AppType.money),
                 ],
@@ -116,10 +123,10 @@ class _OfferLossSheet extends StatelessWidget {
               ],
             ]),
             const SizedBox(height: AppSpace.l),
-            const Divider(height: 1, color: Color(0xFFE3E9E8)),
+            Divider(height: 1, color: Color(0xFFE3E9E8)),
             const SizedBox(height: AppSpace.m),
             // --- efeito na prioridade das próximas chamadas ---
-            const Row(children: [
+            Row(children: [
               Icon(Icons.trending_down_rounded,
                   size: 16, color: AppColors.primary),
               SizedBox(width: 6),
@@ -135,17 +142,16 @@ class _OfferLossSheet extends StatelessWidget {
               Row(children: [
                 Text(
                   'Aceite ${_pct(before)}',
-                  style: const TextStyle(
-                      fontSize: 13, color: AppColors.muted),
+                  style: TextStyle(fontSize: 13, color: AppColors.muted),
                 ),
-                const Padding(
+                Padding(
                   padding: EdgeInsets.symmetric(horizontal: 6),
                   child: Icon(Icons.arrow_forward_rounded,
                       size: 14, color: AppColors.muted),
                 ),
                 Text(
                   _pct(after),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: AppColors.danger,
@@ -153,10 +159,10 @@ class _OfferLossSheet extends StatelessWidget {
                 ),
                 const SizedBox(width: AppSpace.s),
                 if (after < before)
-                  const Text('−3%', style: TextStyle(fontSize: 12)),
+                  Text('−3%', style: TextStyle(fontSize: 12)),
               ]),
             const SizedBox(height: AppSpace.xs),
-            const Text(
+            Text(
               'A taxa de aceite é um dos critérios do despacho: quanto mais '
               'ofertas você aceita, mais cedo a próxima chamada chega. A '
               'penalização é suave e se recupera aceitando as próximas.',
@@ -165,7 +171,7 @@ class _OfferLossSheet extends StatelessWidget {
             const SizedBox(height: AppSpace.l),
             FilledButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('ENTENDI'),
+              child: Text('ENTENDI'),
             ),
           ],
         ),
@@ -174,22 +180,21 @@ class _OfferLossSheet extends StatelessWidget {
   }
 
   Widget _fact(IconData icon, String label, String value) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Icon(icon, size: 13, color: AppColors.muted),
-            const SizedBox(width: 4),
-            Text(label,
-                style: const TextStyle(fontSize: 11, color: AppColors.muted)),
-          ]),
-          const SizedBox(height: 2),
-          Text(value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style:
-                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-        ],
-      );
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(children: [
+        Icon(icon, size: 13, color: AppColors.muted),
+        const SizedBox(width: 4),
+        Text(label,
+            style: TextStyle(fontSize: 11, color: AppColors.muted)),
+      ]),
+      const SizedBox(height: 2),
+      Text(value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+    ],
+  );
 }
 
 /// `1,2` — mesmo padrão pt-BR do card da oferta.

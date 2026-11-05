@@ -27,9 +27,6 @@ class _ParceiroAppState extends State<ParceiroApp> {
   bool _signedIn = false; // P1: apresentação/login antes do shell
   bool _apresentou = false; // apresentação de abertura já exibida
 
-  // Tema
-  bool _themeLoaded = false;
-
   @override
   void initState() {
     super.initState();
@@ -40,6 +37,8 @@ class _ParceiroAppState extends State<ParceiroApp> {
     _api = ApiClient(baseUrl: fromEnv, accessToken: () => token);
     _partner = PartnerController(_api);
     _partner.loadMe(); // perfil/KYC ao abrir (P1 gate: em análise ≠ online)
+    // Mostra o login imediatamente para evitar tela branca durante o carregamento do tema.
+    // O tema continua carregando em segundo plano.
     _loadTheme();
   }
 
@@ -48,9 +47,7 @@ class _ParceiroAppState extends State<ParceiroApp> {
     // O Perfil escreve neste notifier ao trocar de tema; aqui só semeia o
     // valor salvo, para o app abrir já no modo escolhido.
     themeModeNotifier.value = mode;
-    if (mounted) setState(() => _themeLoaded = true);
   }
-
 
   @override
   void dispose() {
@@ -60,15 +57,8 @@ class _ParceiroAppState extends State<ParceiroApp> {
 
   @override
   Widget build(BuildContext context) {
-    // Enquanto o tema não carrega, exibe tela neutra para evitar "flash" de tema.
-    if (!_themeLoaded) {
-      return const MaterialApp(
-        home: Scaffold(
-          body: Center(child: CircularProgressIndicator()),
-        ),
-      );
-    }
-
+    // Mostra o login imediatamente para evitar tela branca durante o carregamento do tema.
+    // O tema continua carregando em segundo plano.
     return AppScope(
       partner: _partner,
       api: _api,
