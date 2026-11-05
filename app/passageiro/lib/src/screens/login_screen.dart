@@ -21,16 +21,46 @@ class _LoginScreenState extends State<LoginScreen> {
   final _phone = TextEditingController();
   final _email = TextEditingController();
   final _otp = TextEditingController();
+
+  // M6: um FocusNode por campo, criado no initState. Sem isso o foco fica
+  // preso no campo anterior e o teclado numérico não troca para letras.
+  late final FocusNode _phoneFocus;
+  late final FocusNode _emailFocus;
+  late final FocusNode _otpFocus;
+
   int _step = 0; // 0 = numero, 1 = email, 2 = OTP
   bool _busy = false;
   String? _error;
+
+  /// Formato mínimo de e-mail: algo@dominio.tld (sem espaços).
+  static final _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]{2,}$');
+
+  @override
+  void initState() {
+    super.initState();
+    _phoneFocus = FocusNode(debugLabel: 'login-phone');
+    _emailFocus = FocusNode(debugLabel: 'login-email');
+    _otpFocus = FocusNode(debugLabel: 'login-otp');
+  }
 
   @override
   void dispose() {
     _phone.dispose();
     _email.dispose();
     _otp.dispose();
+    _phoneFocus.dispose();
+    _emailFocus.dispose();
+    _otpFocus.dispose();
     super.dispose();
+  }
+
+  /// Pede o foco só depois do frame: o campo da próxima etapa ainda não
+  /// existe quando o botão é tocado.
+  void _focusAfterFrame(FocusNode node) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      node.requestFocus();
+    });
   }
 
   String get _phoneDigits => _phone.text.replaceAll(RegExp(r'\D'), '');
@@ -40,21 +70,29 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _error = 'Informe um celular com DDD.');
       return;
     }
+    // Desfoca o celular antes de trocar de campo: é o que encerra a conexão
+    // do teclado numérico com o sistema.
+    _phoneFocus.unfocus();
     setState(() {
       _error = null;
       _step = 1;
     });
+    _focusAfterFrame(_emailFocus);
   }
 
   void _submitEmail() {
-    if (_email.text.isEmpty || !_email.text.contains('@')) {
-      setState(() => _error = 'Informe um email válido.');
+    final value = _email.text.trim();
+    if (!_emailPattern.hasMatch(value)) {
+      setState(() =>
+          _error = 'Informe um e-mail válido, como nome@exemplo.com.');
       return;
     }
+    _emailFocus.unfocus();
     setState(() {
       _error = null;
       _step = 2;
     });
+    _focusAfterFrame(_otpFocus);
   }
 
   Future<void> _submitOtp() async {
@@ -132,6 +170,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       phone: _phone,
                       email: _email,
                       otp: _otp,
+                      phoneFocus: _phoneFocus,
+                      emailFocus: _emailFocus,
+                      otpFocus: _otpFocus,
                       busy: _busy,
                       error: _error,
                       onSubmitPhone: _submitPhone,
@@ -161,6 +202,9 @@ class _AuthCard extends StatelessWidget {
     required this.phone,
     required this.email,
     required this.otp,
+    required this.phoneFocus,
+    required this.emailFocus,
+    required this.otpFocus,
     required this.busy,
     required this.error,
     required this.onSubmitPhone,
@@ -171,6 +215,7 @@ class _AuthCard extends StatelessWidget {
 
   final int step;
   final TextEditingController phone, email, otp;
+  final FocusNode phoneFocus, emailFocus, otpFocus;
   final bool busy;
   final String? error;
   final VoidCallback onSubmitPhone, onSubmitEmail, onSubmitOtp;
@@ -204,8 +249,12 @@ class _AuthCard extends StatelessWidget {
                     style: labelStyle(context)),
                 const SizedBox(height: AppSpace.l),
                 TextField(
+                  key: const ValueKey('login-phone'),
                   controller: phone,
+                  focusNode: phoneFocus,
                   keyboardType: TextInputType.phone,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.telephoneNumber],
                   autofocus: true,
                   decoration: const InputDecoration(
                     labelText: 'Número de celular',
@@ -241,11 +290,16 @@ class _AuthCard extends StatelessWidget {
                         style: labelStyle(context)),
                     const SizedBox(height: AppSpace.l),
                     TextField(
+                      key: const ValueKey('login-email'),
                       controller: email,
+                      focusNode: emailFocus,
                       keyboardType: TextInputType.emailAddress,
-                      autofocus: true,
+                      textInputAction: TextInputAction.done,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      autofillHints: const [AutofillHints.email],
                       decoration: const InputDecoration(
-                        labelText: 'Email',
+                        labelText: 'E-mail',
                         hintText: 'exemplo@email.com',
                       ),
                       onSubmitted: (_) => onSubmitEmail(),
@@ -288,10 +342,13 @@ class _AuthCard extends StatelessWidget {
                         style: labelStyle(context)),
                     const SizedBox(height: AppSpace.l),
                     TextField(
+                      key: const ValueKey('login-otp'),
                       controller: otp,
+                      focusNode: otpFocus,
                       keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.done,
+                      autofillHints: const [AutofillHints.oneTimeCode],
                       maxLength: 4,
-                      autofocus: true,
                       textAlign: TextAlign.center,
                       style: AppType.display.copyWith(letterSpacing: 12),
                       decoration: const InputDecoration(

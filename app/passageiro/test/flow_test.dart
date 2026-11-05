@@ -522,7 +522,7 @@ void main() {
     await tester.tap(find.text('CONTINUAR'));
     await tester.pump();
     // Login em duas etapas: celular → email → código.
-    expect(find.text('Email'), findsWidgets);
+    expect(find.text('E-mail'), findsWidgets);
     await tester.enterText(find.byType(TextField), 'teste@dezemais.app');
     await tester.tap(find.text('CONTINUAR'));
     await tester.pump();
