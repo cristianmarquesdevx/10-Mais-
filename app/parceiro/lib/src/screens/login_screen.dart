@@ -165,21 +165,37 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       Expanded(
-                        child: SingleChildScrollView(
-                          physics: const ClampingScrollPhysics(),
-                          child: _AuthCard(
-                            step: _step,
-                            phone: _phone,
-                            otp: _otp,
-                            busy: _busy,
-                            error: _error,
-                            onSubmitPhone: _submitPhone,
-                            onSubmitOtp: _submitOtp,
-                            onChangeStep: (s) => setState(() {
-                              _step = s;
-                              _error = null;
-                            }),
-                          ),
+                        child: LayoutBuilder(
+                          builder: (context, cardConstraints) {
+                            return SingleChildScrollView(
+                              physics: const ClampingScrollPhysics(),
+                              child: ConstrainedBox(
+                                // Com o teclado aberto o cartão encosta nele,
+                                // em vez de ficar no topo com um vazio.
+                                constraints: BoxConstraints(
+                                  minHeight: cardConstraints.maxHeight,
+                                ),
+                                child: Align(
+                                  alignment: keyboard
+                                      ? Alignment.bottomCenter
+                                      : Alignment.topCenter,
+                                  child: _AuthCard(
+                                    step: _step,
+                                    phone: _phone,
+                                    otp: _otp,
+                                    busy: _busy,
+                                    error: _error,
+                                    onSubmitPhone: _submitPhone,
+                                    onSubmitOtp: _submitOtp,
+                                    onChangeStep: (s) => setState(() {
+                                      _step = s;
+                                      _error = null;
+                                    }),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
                         ),
                       ),
                     ],

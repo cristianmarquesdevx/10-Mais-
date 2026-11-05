@@ -208,26 +208,42 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                     Expanded(
-                      child: SingleChildScrollView(
-                        physics: const ClampingScrollPhysics(),
-                        child: _AuthCard(
-                          step: _step,
-                          phone: _phone,
-                          email: _email,
-                          otp: _otp,
-                          phoneFocus: _phoneFocus,
-                          emailFocus: _emailFocus,
-                          otpFocus: _otpFocus,
-                          busy: _busy,
-                          error: _error,
-                          onSubmitPhone: _submitPhone,
-                          onSubmitEmail: _submitEmail,
-                          onSubmitOtp: _submitOtp,
-                          onChangeStep: (s) => setState(() {
-                            _step = s;
-                            _error = null;
-                          }),
-                        ),
+                      child: LayoutBuilder(
+                        builder: (context, cardConstraints) {
+                          return SingleChildScrollView(
+                            physics: const ClampingScrollPhysics(),
+                            child: ConstrainedBox(
+                              // Com o teclado aberto o cartão encosta nele, em
+                              // vez de ficar no topo com um vazio no meio.
+                              constraints: BoxConstraints(
+                                minHeight: cardConstraints.maxHeight,
+                              ),
+                              child: Align(
+                                alignment: keyboard
+                                    ? Alignment.bottomCenter
+                                    : Alignment.topCenter,
+                                child: _AuthCard(
+                                  step: _step,
+                                  phone: _phone,
+                                  email: _email,
+                                  otp: _otp,
+                                  phoneFocus: _phoneFocus,
+                                  emailFocus: _emailFocus,
+                                  otpFocus: _otpFocus,
+                                  busy: _busy,
+                                  error: _error,
+                                  onSubmitPhone: _submitPhone,
+                                  onSubmitEmail: _submitEmail,
+                                  onSubmitOtp: _submitOtp,
+                                  onChangeStep: (s) => setState(() {
+                                    _step = s;
+                                    _error = null;
+                                  }),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ],
@@ -330,9 +346,9 @@ class _AuthCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('Email', style: titleStyle(context)),
+                    Text('E-mail', style: titleStyle(context)),
                     const SizedBox(height: AppSpace.xs),
-                    Text('Digite seu email para recuperação de conta.',
+                    Text('Digite seu e-mail para recuperação de conta.',
                         style: labelStyle(context)),
                     const SizedBox(height: AppSpace.l),
                     TextField(

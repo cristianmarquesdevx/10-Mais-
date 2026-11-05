@@ -49,4 +49,19 @@ void main() {
         reason: 'o carrossel deve sair de cena com o teclado aberto');
     expect(find.text('Entrar ou criar conta'), findsOneWidget);
   });
+
+  testWidgets('com teclado o cartão ancora no rodapé, não no topo',
+      (tester) async {
+    await pumpLogin(tester, const Size(360, 800));
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    const bodyHeight = 800 - 320;
+    final titleTop =
+        tester.getTopLeft(find.text('Entrar ou criar conta')).dy;
+    expect(titleTop, greaterThan(bodyHeight * 0.25),
+        reason: 'o cartão deve encostar no teclado, sem vazio no meio');
+  });
 }
