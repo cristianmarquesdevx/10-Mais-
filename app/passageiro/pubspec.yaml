@@ -34,9 +34,5 @@ flutter:
     - assets/10-e-mais-logos/
     - assets/10-e-mais-logos/png/
     - assets/10-e-mais-logos/svg/
-    - assets/10-e-mais-carrossel-login/
-    - assets/10-e-mais-carrossel-login/png/
-    - assets/10-e-mais-carrossel-login/svg/
-    - assets/10-e-mais-carrossel-raspadinha/
-    - assets/10-e-mais-carrossel-raspadinha/png/
-    - assets/10-e-mais-carrossel-raspadinha/svg/
+    - assets/10-e-mais-carrossel-login-sem-logo/png/
+    - assets/10-e-mais-carrossel-raspadinha-sem-logo/png/

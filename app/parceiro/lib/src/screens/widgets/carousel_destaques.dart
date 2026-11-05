@@ -5,9 +5,9 @@ import 'package:ten_design/ten_design.dart';
 
 /// Carrossel de destaques exibido no login, abaixo da logo.
 ///
-/// As artes promocionais são pôsteres verticais (1080x1350). Elas aparecem
-/// inteiras — `BoxFit.contain` — sem cartão, sombra ou moldura: o fundo da
-/// tela (degradê) é o fundo do carrossel.
+/// As artes promocionais são pôsteres verticais (1080x1230, sem logo). Elas
+/// aparecem inteiras — `BoxFit.contain` — sem cartão, sombra ou moldura: o
+/// fundo da tela (degradê) é o fundo do carrossel.
 ///
 /// A altura vem do pai (o login usa o espaço livre). Os indicadores ficam
 /// fora do `PageView`, então não rolam junto com a arte.
@@ -56,7 +56,7 @@ class _CarouselDestaquesState extends State<CarouselDestaques> {
                 padding: const EdgeInsets.symmetric(horizontal: 6),
                 child: Center(
                   child: AspectRatio(
-                    aspectRatio: 1080 / 1350,
+                    aspectRatio: 1080 / 1230,
                     child: ColoredBox(
                       // No tema escuro a arte clara precisa de um fundo claro
                       // retangular; no claro o degradê da tela já é o fundo.

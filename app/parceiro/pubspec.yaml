@@ -36,12 +36,8 @@ flutter:
     - assets/10-e-mais-logos/png/
     # O Flutter só empacota os arquivos do diretório listado (não recursivo):
     # sem os subdiretórios, o carrossel do login e a raspadinha ficam sem imagem.
-    - assets/10-e-mais-carrossel-login/
-    - assets/10-e-mais-carrossel-login/png/
-    - assets/10-e-mais-carrossel-login/svg/
-    - assets/10-e-mais-carrossel-raspadinha/
-    - assets/10-e-mais-carrossel-raspadinha/png/
-    - assets/10-e-mais-carrossel-raspadinha/svg/
+    - assets/10-e-mais-carrossel-login-sem-logo/png/
+    - assets/10-e-mais-carrossel-raspadinha-sem-logo/png/
     - assets/vehicles/
     - assets/map/
     - assets/apresentacao/
