@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../assets/app_assets.dart';
+
 /// Tela de apresentação do app do motorista: a arte da marca "10 é +" com o
 /// carro e a moto, o slogan e os indicadores. É a primeira tela ao abrir o
 /// app; tocar em qualquer ponto (ou esperar) segue para o login.
@@ -64,7 +66,7 @@ class _ApresentacaoScreenState extends State<ApresentacaoScreen> {
             child: SizedBox.expand(
               child: SafeArea(
                 child: Image.asset(
-                  'assets/apresentacao/apresentacao.png',
+                  AppAssets.apresentacao,
                   fit: BoxFit.contain,
                   filterQuality: FilterQuality.high,
                   semanticLabel: '10 é + — Rodar com vantagem',

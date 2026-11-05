@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
+import '../assets/app_assets.dart';
 import '../theme/theme.dart';
 import '../widgets/city_map.dart';
 import 'sos_sheet.dart';
@@ -64,9 +65,7 @@ class _TopBar extends StatelessWidget {
               boxShadow: dark ? appShadowDark() : appShadow,
             ),
             child: Image.asset(
-              dark
-                  ? 'assets/10-e-mais-logos/png/logo_branco.png'
-                  : 'assets/10-e-mais-logos/png/logo_transparente.png',
+              dark ? AppAssets.logoBranco : AppAssets.logoTransparente,
               height: 28,
               errorBuilder: (_, __, ___) =>
                   Icon(Icons.verified, color: t.primary, size: 22),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../assets/app_assets.dart';
 import '../theme/theme.dart';
 import 'package:ten_design/ten_design.dart';
 import 'widgets/carousel_destaques.dart';
@@ -76,7 +77,7 @@ class _LoginScreenState extends State<LoginScreen> {
           if (dark) ...[
             // Mapa noturno do kit ao fundo + véu grafite + glow verde.
             Image.asset(
-              'assets/map/mapa.jpg',
+              AppAssets.mapa,
               fit: BoxFit.cover,
               opacity: const AlwaysStoppedAnimation(0.18),
               errorBuilder: (_, __, ___) => const SizedBox.shrink(),
@@ -123,11 +124,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: AppSpace.xxl),
                 // Logo - versão clara para tema claro, branca para tema escuro
                 Image.asset(
-                  dark
-                      ? 'assets/10-e-mais-logos/png/logo_branco.png'
-                      // Versão da marca com fundo removido: a arte original
-                      // tem fundo branco e desenhava um retângulo no halo.
-                      : 'assets/10-e-mais-logos/png/logo_transparente.png',
+                  dark ? AppAssets.logoBranco : AppAssets.logoTransparente,
                   height: 64,
                   errorBuilder: (_, __, ___) =>
                       Icon(Icons.verified, size: 56, color: t.primary),

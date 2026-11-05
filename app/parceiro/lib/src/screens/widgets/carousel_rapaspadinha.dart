@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../assets/app_assets.dart';
 import 'package:ten_design/ten_design.dart';
 
 /// Carrossel de campanhas rapaspadinha exibido acima da lista de campanhas.
@@ -46,7 +47,7 @@ class CarouselRapaspadinha extends StatelessWidget {
                     child: Image.asset(
                       (item['imagem'] ??
                           item['imageUrl'] ??
-                          'assets/apresentacao/apresentacao.png') as String,
+                          AppAssets.apresentacao) as String,
                       fit: BoxFit.contain,
                       width: double.infinity,
                       height: double.infinity,

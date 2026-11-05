@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
+import '../assets/app_assets.dart';
 import '../theme/theme.dart';
 
 /// Aba Perfil do shell: identidade do parceiro, estado do KYC e atalhos
@@ -80,7 +81,7 @@ class _PerfilScreenState extends State<PerfilScreen> {
                     children: [
                       Row(children: [
                         Image.asset(
-                          'assets/10-e-mais-logos/png/logo_icone.png',
+                          AppAssets.logoIcone,
                           height: 16,
                           errorBuilder: (_, __, ___) =>
                               const Icon(Icons.verified, size: 16),

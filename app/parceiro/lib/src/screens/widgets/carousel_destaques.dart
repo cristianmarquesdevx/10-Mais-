@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../assets/app_assets.dart';
 import 'package:ten_design/ten_design.dart';
 
 /// Carrossel de destaques exibido no login, abaixo da logo.
@@ -18,23 +19,9 @@ class CarouselDestaques extends StatefulWidget {
 }
 
 class _CarouselDestaquesState extends State<CarouselDestaques> {
-  static const _items = [
-    {
-      'imagem': 'assets/10-e-mais-carrossel-login/png/01_corrida_em_segundos.png',
-    },
-    {
-      'imagem': 'assets/10-e-mais-carrossel-login/png/02_entrega_com_foto.png',
-    },
-    {
-      'imagem': 'assets/10-e-mais-carrossel-login/png/03_aviso_de_chegada.png',
-    },
-    {
-      'imagem': 'assets/10-e-mais-carrossel-login/png/04_pague_do_seu_jeito.png',
-    },
-    {
-      'imagem': 'assets/10-e-mais-carrossel-login/png/05_ganhos_do_motorista.png',
-    },
-  ];
+  static final _items = AppAssets.carrosselLoginSlides
+      .map((imagem) => <String, dynamic>{'imagem': imagem})
+      .toList(growable: false);
 
   final _controller = PageController(viewportFraction: 0.56);
   int _page = 0;

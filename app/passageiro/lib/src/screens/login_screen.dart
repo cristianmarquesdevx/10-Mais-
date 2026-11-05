@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../assets/app_assets.dart';
 import '../theme/theme.dart';
 import 'widgets/carousel_destaques.dart';
 
@@ -118,9 +119,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   children: [
                     const SizedBox(height: AppSpace.l),
                     Image.asset(
-                      dark
-                          ? 'assets/10-e-mais-logos/png/logo_branco.png'
-                          : 'assets/10-e-mais-logos/png/logo_transparente.png',
+                      dark ? AppAssets.logoBranco : AppAssets.logoTransparente,
                       height: 44,
                       errorBuilder: (_, __, ___) =>
                           Icon(Icons.verified, size: 40, color: t.primary),

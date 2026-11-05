@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../assets/app_assets.dart';
 import '../theme/theme.dart';
 
 /// Aba Veículos do shell: garagem do parceiro com os assets do kit
@@ -25,7 +26,7 @@ class VeiculosScreen extends StatelessWidget {
               name: 'Honda CG 160',
               plate: 'ABC-1234',
               kind: 'Moto · padrão',
-              image: 'assets/vehicles/moto.png',
+              image: AppAssets.veiculoMoto,
               selected: true,
             ),
             const SizedBox(height: AppSpace.m),
@@ -33,7 +34,7 @@ class VeiculosScreen extends StatelessWidget {
               name: 'Fiat Cronos',
               plate: 'DEF-5678',
               kind: 'Carro',
-              image: 'assets/vehicles/carro.png',
+              image: AppAssets.veiculoCarro,
               selected: false,
             ),
             const SizedBox(height: AppSpace.xl),

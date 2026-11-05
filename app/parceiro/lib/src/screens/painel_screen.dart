@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../main.dart';
 import '../api/client.dart';
+import '../assets/app_assets.dart';
 import '../state/partner_controller.dart';
 import '../theme/theme.dart';
 import '../widgets/heatmap_map.dart';
@@ -239,7 +240,7 @@ class _BrandChip extends StatelessWidget {
         Icon(Icons.add, size: 16, color: t.primary),
         const SizedBox(width: 4),
         Image.asset(
-          'assets/10-e-mais-logos/png/logo_icone.png',
+          AppAssets.logoIcone,
           height: 15,
           errorBuilder: (_, __, ___) => Icon(Icons.verified, size: 15, color: t.primary),
         ),

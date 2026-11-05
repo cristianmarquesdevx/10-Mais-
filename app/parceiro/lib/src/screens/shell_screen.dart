@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
+import '../assets/app_assets.dart';
 import '../state/partner_controller.dart';
 import '../theme/theme.dart';
 import 'screens.dart';
@@ -129,9 +130,7 @@ class _PartnerDrawer extends StatelessWidget {
               padding: const EdgeInsets.all(AppSpace.xl),
               child: Row(children: [
                 Image.asset(
-                  dark
-                      ? 'assets/10-e-mais-logos/png/logo_branco.png'
-                      : 'assets/10-e-mais-logos/png/logo_transparente.png',
+                  dark ? AppAssets.logoBranco : AppAssets.logoTransparente,
                   height: 36,
                   errorBuilder: (_, __, ___) =>
                       const Icon(Icons.verified, size: 32),
@@ -142,7 +141,7 @@ class _PartnerDrawer extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
-                        Image.asset('assets/10-e-mais-logos/png/logo_icone.png',
+                        Image.asset(AppAssets.logoIcone,
                             height: 16,
                             errorBuilder: (_, __, ___) =>
                                 const Icon(Icons.verified, size: 16)),
