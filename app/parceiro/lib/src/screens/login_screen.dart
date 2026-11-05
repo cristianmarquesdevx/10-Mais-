@@ -68,112 +68,133 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final t = tokensOf(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
+    // IMPORTANTE: ler o inset AQUI, fora do Scaffold. Com
+    // `resizeToAvoidBottomInset: true` o Scaffold consome o inset do body e
+    // `viewInsets.bottom` vira 0 lá dentro.
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
+
     return Scaffold(
       backgroundColor: t.background,
       resizeToAvoidBottomInset: true,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (dark) ...[
-            // Mapa noturno do kit ao fundo + véu grafite + glow verde.
-            Image.asset(
-              AppAssets.mapa,
-              fit: BoxFit.cover,
-              opacity: const AlwaysStoppedAnimation(0.18),
-              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-            ),
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [AppColors.graphiteDeep, Color(0xCC232C30)],
+      body: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: dark
+                ? [t.background, t.surface]
+                // Fundo do carrossel: mesmo degradê da arte (#E6F5F2 → branco).
+                : const [Color(0xFFE6F5F2), Colors.white],
+          ),
+        ),
+        child: Stack(
+          children: [
+            if (dark)
+              Positioned.fill(
+                child: Image.asset(
+                  AppAssets.mapa,
+                  fit: BoxFit.cover,
+                  opacity: const AlwaysStoppedAnimation(0.10),
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                 ),
               ),
-            ),
-          ] else ...[
-            // Claro: fundo do tema + halo verde suave atrás da marca.
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFFEDF9F7), Color(0xFFFBFEFD)],
-                ),
-              ),
-            ),
-            Positioned(
-              top: -120,
-              right: -90,
-              child: Container(
-                width: 300,
-                height: 300,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    AppColors.primary.withValues(alpha: 0.20),
-                    AppColors.primary.withValues(alpha: 0.0),
-                  ]),
-                ),
+            SafeArea(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // Com o teclado aberto a área útil encolhe; escondemos logo e
+                  // carrossel para o cartão e o campo ativo ficarem visíveis.
+                  final logoWidth = (constraints.maxWidth * 0.55)
+                      .clamp(180.0, 320.0)
+                      .toDouble();
+                  final carouselHeight = (constraints.maxHeight * 0.42)
+                      .clamp(140.0, 360.0)
+                      .toDouble();
+                  // Reserva mínima para o cartão. O bloco (logo + carrossel)
+                  // nunca pode passar disso: é o que impede o RenderFlex de
+                  // estourar no frame em que o teclado abre.
+                  const cardMinHeight = 240.0;
+                  final blockMaxHeight = (constraints.maxHeight - cardMinHeight)
+                      .clamp(0.0, double.infinity)
+                      .toDouble();
+
+                  return Column(
+                    children: [
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: blockMaxHeight),
+                        child: AnimatedSize(
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOutCubic,
+                          alignment: Alignment.topCenter,
+                          clipBehavior: Clip.hardEdge,
+                          child: keyboard
+                              ? const SizedBox(width: double.infinity)
+                              : OverflowBox(
+                                  // O bloco tem altura natural (logo + carrossel).
+                                  // O Clip do AnimatedSize corta o excedente sem
+                                  // fazer o Column interno estourar no frame em
+                                  // que o teclado abre.
+                                  alignment: Alignment.topCenter,
+                                  maxHeight: double.infinity,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: AppSpace.l,
+                                          bottom: AppSpace.m,
+                                        ),
+                                        child: Image.asset(
+                                          dark
+                                              ? AppAssets.logoBranco
+                                              : AppAssets.logoTransparente,
+                                          width: logoWidth,
+                                          errorBuilder: (_, __, ___) => Icon(
+                                            Icons.verified,
+                                            size: logoWidth * 0.18,
+                                            color: t.primary,
+                                          ),
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        height: carouselHeight,
+                                        child: const CarouselDestaques(),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                        ),
+                      ),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          physics: const ClampingScrollPhysics(),
+                          child: _AuthCard(
+                            step: _step,
+                            phone: _phone,
+                            otp: _otp,
+                            busy: _busy,
+                            error: _error,
+                            onSubmitPhone: _submitPhone,
+                            onSubmitOtp: _submitOtp,
+                            onChangeStep: (s) => setState(() {
+                              _step = s;
+                              _error = null;
+                            }),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ],
-          SafeArea(
-            child: Column(
-              children: [
-                const SizedBox(height: AppSpace.xxl),
-                // Logo - versão clara para tema claro, branca para tema escuro
-                Image.asset(
-                  dark ? AppAssets.logoBranco : AppAssets.logoTransparente,
-                  height: 64,
-                  errorBuilder: (_, __, ___) =>
-                      Icon(Icons.verified, size: 56, color: t.primary),
-                ),
-                const SizedBox(height: AppSpace.s),
-                // Carrossel de login - posicionado logo abaixo da logo e acima do campo
-                // 5 imagens promocionais com auto-slide de 3s
-                const CarouselDestaques(),
-                const SizedBox(height: AppSpace.m),
-                Text(
-                  'Seu volante. Seu dinheiro.',
-                  style: AppType.titleOnDark
-                      .copyWith(fontSize: 25, color: t.ink),
-                ),
-                const SizedBox(height: AppSpace.s),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.xl),
-                  child: Text(
-                    'Com o Passe 10 é + você fica com 100% de cada corrida — '
-                    'sem taxa, sem pegadinha.',
-                    textAlign: TextAlign.center,
-                    style: AppType.onDark.copyWith(color: t.muted),
-                  ),
-                ),
-                const Spacer(),
-                _AuthCard(
-                  step: _step,
-                  phone: _phone,
-                  otp: _otp,
-                  busy: _busy,
-                  error: _error,
-                  onSubmitPhone: _submitPhone,
-                  onSubmitOtp: _submitOtp,
-                  onChangeStep: (s) => setState(() {
-                    _step = s;
-                    _error = null;
-                  }),
-                ),
-                const SizedBox(height: AppSpace.xl),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-/// Card branco/inferior com o formulário da etapa atual.
+/// Card com o formulário da etapa atual.
 class _AuthCard extends StatelessWidget {
   const _AuthCard({
     required this.step,

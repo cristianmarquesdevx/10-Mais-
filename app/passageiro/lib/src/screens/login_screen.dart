@@ -115,6 +115,10 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final t = tokensOf(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
+    // IMPORTANTE: ler o inset AQUI, fora do Scaffold. Com
+    // `resizeToAvoidBottomInset: true` o Scaffold consome o inset do body e
+    // `viewInsets.bottom` vira 0 lá dentro.
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle(
@@ -128,67 +132,109 @@ class _LoginScreenState extends State<LoginScreen> {
       child: Scaffold(
         backgroundColor: t.background,
         resizeToAvoidBottomInset: true,
-        body: Stack(
-          children: [
-            // Halo suave da marca no topo: dá profundidade sem competir com
-            // o carrossel nem com o formulário.
-            Positioned(
-              top: -160,
-              left: -60,
-              right: -60,
-              child: IgnorePointer(
-                child: Container(
-                  height: 320,
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(colors: [
-                      t.primary.withValues(alpha: dark ? 0.22 : 0.14),
-                      t.primary.withValues(alpha: 0.0),
-                    ]),
-                  ),
-                ),
-              ),
+        body: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: dark
+                  ? [t.background, t.surface]
+                  // Fundo do carrossel: mesmo degradê da arte (#E6F5F2 → branco).
+                  : const [Color(0xFFE6F5F2), Colors.white],
             ),
-            SafeArea(
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.only(
-                    bottom: MediaQuery.of(context).viewInsets.bottom),
-                child: Column(
+          ),
+          child: SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // Com o teclado aberto a área útil encolhe; escondemos logo e
+                // carrossel para o cartão e o campo ativo ficarem visíveis.
+                final logoWidth =
+                    (constraints.maxWidth * 0.55).clamp(180.0, 320.0).toDouble();
+                final carouselHeight =
+                    (constraints.maxHeight * 0.42).clamp(140.0, 360.0).toDouble();
+                // Reserva mínima para o cartão. O bloco (logo + carrossel)
+                // nunca pode passar disso: é o que impede o RenderFlex de
+                // estourar no frame em que o teclado abre.
+                const cardMinHeight = 240.0;
+                final blockMaxHeight = (constraints.maxHeight - cardMinHeight)
+                    .clamp(0.0, double.infinity)
+                    .toDouble();
+
+                return Column(
                   children: [
-                    const SizedBox(height: AppSpace.l),
-                    Image.asset(
-                      dark ? AppAssets.logoBranco : AppAssets.logoTransparente,
-                      height: 44,
-                      errorBuilder: (_, __, ___) =>
-                          Icon(Icons.verified, size: 40, color: t.primary),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: blockMaxHeight),
+                      child: AnimatedSize(
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOutCubic,
+                        alignment: Alignment.topCenter,
+                        clipBehavior: Clip.hardEdge,
+                        child: keyboard
+                            ? const SizedBox(width: double.infinity)
+                            : OverflowBox(
+                                // O bloco tem altura natural (logo + carrossel).
+                                // O Clip do AnimatedSize corta o excedente sem
+                                // fazer o Column interno estourar no frame em
+                                // que o teclado abre.
+                                alignment: Alignment.topCenter,
+                                maxHeight: double.infinity,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                        top: AppSpace.l,
+                                        bottom: AppSpace.m,
+                                      ),
+                                      child: Image.asset(
+                                        dark
+                                            ? AppAssets.logoBranco
+                                            : AppAssets.logoTransparente,
+                                        width: logoWidth,
+                                        errorBuilder: (_, __, ___) => Icon(
+                                          Icons.verified,
+                                          size: logoWidth * 0.18,
+                                          color: t.primary,
+                                        ),
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      height: carouselHeight,
+                                      child: const CarouselDestaques(),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                      ),
                     ),
-                    const SizedBox(height: AppSpace.l),
-                    const CarouselDestaques(),
-                    const SizedBox(height: AppSpace.m),
-                    _AuthCard(
-                      step: _step,
-                      phone: _phone,
-                      email: _email,
-                      otp: _otp,
-                      phoneFocus: _phoneFocus,
-                      emailFocus: _emailFocus,
-                      otpFocus: _otpFocus,
-                      busy: _busy,
-                      error: _error,
-                      onSubmitPhone: _submitPhone,
-                      onSubmitEmail: _submitEmail,
-                      onSubmitOtp: _submitOtp,
-                      onChangeStep: (s) => setState(() {
-                        _step = s;
-                        _error = null;
-                      }),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        physics: const ClampingScrollPhysics(),
+                        child: _AuthCard(
+                          step: _step,
+                          phone: _phone,
+                          email: _email,
+                          otp: _otp,
+                          phoneFocus: _phoneFocus,
+                          emailFocus: _emailFocus,
+                          otpFocus: _otpFocus,
+                          busy: _busy,
+                          error: _error,
+                          onSubmitPhone: _submitPhone,
+                          onSubmitEmail: _submitEmail,
+                          onSubmitOtp: _submitOtp,
+                          onChangeStep: (s) => setState(() {
+                            _step = s;
+                            _error = null;
+                          }),
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: AppSpace.xl),
                   ],
-                ),
-              ),
+                );
+              },
             ),
-          ],
+          ),
         ),
       ),
     );
