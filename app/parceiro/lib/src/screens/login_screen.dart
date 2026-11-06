@@ -255,6 +255,7 @@ class _AuthCard extends StatelessWidget {
                     labelText: 'Celular',
                     hintText: '(69) 9 9999-9999',
                     prefixIcon: const Icon(Icons.phone_iphone),
+                    floatingLabelBehavior: FloatingLabelBehavior.always,
                     errorText: error,
                     errorMaxLines: 2,
                   ),

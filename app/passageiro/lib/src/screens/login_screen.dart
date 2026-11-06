@@ -313,6 +313,7 @@ class _AuthCard extends StatelessWidget {
                     labelText: 'Número de celular',
                     hintText: '(69) 9 9999-9999',
                     prefixIcon: const Icon(Icons.phone_iphone),
+                    floatingLabelBehavior: FloatingLabelBehavior.always,
                     errorText: error,
                     errorMaxLines: 2,
                   ),
@@ -353,6 +354,7 @@ class _AuthCard extends StatelessWidget {
                       decoration: InputDecoration(
                         labelText: 'E-mail',
                         hintText: 'exemplo@email.com',
+                        floatingLabelBehavior: FloatingLabelBehavior.always,
                         errorText: error,
                         errorMaxLines: 2,
                       ),
