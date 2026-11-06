@@ -187,6 +187,11 @@ STATE = {
 # Zonas de calor (fonte única do preço por demanda e do mapa).
 # Bairros REAIS de Porto Velho/RO, com o centroide retornado pelo Nominatim
 # (OpenStreetMap) — nada de nome inventado. Levantado em 24/10/2026.
+#
+# IMPORTANTE: estes números NÃO são demanda real. São cenário de ensaio.
+# A rota /heatmap marca a resposta com "demo": true e o app desenha a marca
+# d'água DEMO. Para ensaiar o estado honesto "sem dados de demanda", suba o
+# servidor com DEMO_HEAT=0 e a rota devolve zones: [].
 HEAT_ZONES = [
     {"lat": -8.7647463, "lon": -63.9040643, "weight": 0.95, "label": "Centro",
      "calls_last_hour": 38},
@@ -207,6 +212,10 @@ HEAT_ZONES = [
     {"lat": -8.7475814, "lon": -63.8694450, "weight": 0.20,
      "label": "Flodoaldo Pontes Pinto", "calls_last_hour": 5},
 ]
+
+# Flag de ensaio: DEMO_HEAT=0 devolve o calor vazio (estado honesto
+# "sem dados de demanda no momento"). Padrão: 1 (cenário DEMO marcado).
+DEMO_HEAT = os.environ.get("DEMO_HEAT", "1") != "0"
 
 # Aceite automático só em modo demo explícito. Em produção/uso normal,
 # ninguém aceita sozinho — dado inventado não é sucesso.
@@ -1741,7 +1750,11 @@ def _route(method: str, path: str, query: dict, body: dict,
 
     # --- mapa: calor de chamadas (por zona, normalizado 0..1) ---
     if method == "GET" and path == "/heatmap":
-        zones = [dict(z) for z in HEAT_ZONES]
+        # Honestidade: esta API é de DEMONSTRAÇÃO. A resposta sempre declara
+        # "demo": true e a origem; o app marca a camada com a marca d'água
+        # DEMO. Um backend de produção não devolve o flag (ou devolve
+        # demo: false) — e nunca devolve números inventados.
+        zones = [dict(z) for z in (HEAT_ZONES if DEMO_HEAT else [])]
         # calor ao vivo: chamadas dos últimos 15 min esquentam a zona mais próxima
         recent = [h for h in STATE["heatmap_hits"] if now() - h["ts"] < 900]
         for z in zones:
@@ -1749,7 +1762,8 @@ def _route(method: str, path: str, query: dict, body: dict,
                        if abs(h["lat"] - z["lat"]) < 0.01 and abs(h["lon"] - z["lon"]) < 0.01)
             z["weight"] = round(min(1.0, z["weight"] + 0.07 * near), 2)
             z["calls_last_hour"] += near
-        return 200, {"generated_at": iso(), "zones": zones}
+        return 200, {"generated_at": iso(), "zones": zones,
+                     "demo": True, "source": "demo"}
 
     # --- parceiro: passe e carteira ---
     # --- demo: relógio (só com --time-travel) -------------------------------

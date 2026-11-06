@@ -29,7 +29,7 @@ class PainelScreen extends StatefulWidget {
 
 class _PainelScreenState extends State<PainelScreen> {
   bool _loaded = false;
-  List<HeatZone> _zones = const [];
+  HeatSnapshot _heat = const HeatSnapshot();
 
   @override
   void didChangeDependencies() {
@@ -47,8 +47,8 @@ class _PainelScreenState extends State<PainelScreen> {
 
   Future<void> _loadHeat() async {
     try {
-      final zones = await AppScope.apiOf(context).heatmap();
-      if (mounted) setState(() => _zones = zones);
+      final snapshot = await AppScope.apiOf(context).heatmap();
+      if (mounted) setState(() => _heat = snapshot);
     } catch (_) {
       // mapa continua sem calor — nunca bloqueia o painel
     }
@@ -91,7 +91,12 @@ class _PainelScreenState extends State<PainelScreen> {
         children: [
           // Mapa de tela inteira, atrás de tudo. A atribuição do OSM é
           // repetida no painel flutuante, onde não fica coberta.
-          HeatmapMap(zones: _zones, showAttribution: false),
+          HeatmapMap(
+            zones: _heat.zones,
+            online: online,
+            demo: _heat.demo,
+            showAttribution: false,
+          ),
           SafeArea(
             bottom: false,
             child: Column(
@@ -126,7 +131,8 @@ class _PainelScreenState extends State<PainelScreen> {
                       breakRemaining: p.breakRemainingSeconds,
                     ),
                     const Spacer(),
-                    if (_zones.isNotEmpty) _HeatPill(count: _zones.length),
+                    if (_heat.zones.isNotEmpty)
+                      _HeatPill(zones: _heat.zones.length, demo: _heat.demo),
                   ]),
                 ),
                 const Spacer(),
@@ -153,6 +159,10 @@ class _PainelScreenState extends State<PainelScreen> {
                     controller: p,
                     info: info,
                     formatSeconds: _formatSeconds,
+                    demandAt: _heat.generatedAt == null
+                        ? null
+                        : '${_heat.generatedAt!.hour.toString().padLeft(2, '0')}:'
+                            '${_heat.generatedAt!.minute.toString().padLeft(2, '0')}',
                   ),
                 ),
               ],
@@ -365,24 +375,56 @@ class _StatusPill extends StatelessWidget {
   }
 }
 
+/// Estado da camada de demanda.
+///
+/// Regra de honestidade: quando não há dado real, o app **diz que não há** —
+/// nunca inventa número. Dado de demonstração vem marcado como DEMO.
 class _HeatPill extends StatelessWidget {
-  const _HeatPill({required this.count});
-  final int count;
+  const _HeatPill({required this.zones, required this.demo});
+
+  final int zones;
+
+  /// O servidor marcou a resposta como demonstração.
+  final bool demo;
 
   @override
   Widget build(BuildContext context) {
     final t = tokensOf(context);
-    return Container(
-      height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
-      decoration: _floatingDecoration(context, radius: AppSpace.radiusChip),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.local_fire_department, color: t.warning, size: 16),
-        const SizedBox(width: 4),
-        Text('$count zonas quentes',
+    final empty = zones == 0;
+    final label = empty
+        ? 'Sem dados de demanda agora'
+        : demo
+            ? 'DEMO · $zones zonas (simulado)'
+            : '$zones zonas quentes';
+    final icon = empty
+        ? Icons.remove_circle_outline
+        : demo
+            ? Icons.science_outlined
+            : Icons.local_fire_department;
+    final iconColor = empty ? t.muted : t.warning;
+    return Semantics(
+      label: empty
+          ? 'Sem dados de demanda no momento'
+          : demo
+              ? 'Camada de demanda em modo demonstração: $zones zonas'
+              : '$zones zonas com demanda',
+      child: Container(
+        height: 34,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
+        decoration: _floatingDecoration(context, radius: AppSpace.radiusChip),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, color: iconColor, size: 16),
+          const SizedBox(width: AppSpace.xs),
+          Text(
+            label,
             style: TextStyle(
-                color: t.ink, fontSize: 12, fontWeight: FontWeight.w600)),
-      ]),
+              color: empty ? t.muted : t.ink,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }
@@ -396,11 +438,15 @@ class _ControlDock extends StatelessWidget {
     required this.controller,
     required this.info,
     required this.formatSeconds,
+    this.demandAt,
   });
 
   final PartnerController controller;
   final PartnerInfo? info;
   final String Function(int) formatSeconds;
+
+  /// Horário do servidor da leitura de demanda ("HH:MM"), quando existe.
+  final String? demandAt;
 
   String _shortDate(DateTime d) {
     final local = d.toLocal();
@@ -521,8 +567,12 @@ class _ControlDock extends StatelessWidget {
                 style: TextStyle(fontSize: 10, color: t.muted),
               ),
             ),
-            Text('relógio do servidor (A7)',
-                style: TextStyle(fontSize: 10, color: t.muted)),
+            // Horário real do servidor: o timestamp da leitura de demanda.
+            // (O antigo "relógio do servidor (A7)" era um texto fixo que
+            // prometia um relógio que o app não tinha.)
+            if (demandAt != null)
+              Text('demanda às $demandAt',
+                  style: TextStyle(fontSize: 10, color: t.muted)),
           ]),
         ],
       ),

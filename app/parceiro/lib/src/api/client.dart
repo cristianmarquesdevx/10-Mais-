@@ -50,6 +50,38 @@ class HeatZone {
       );
 }
 
+/// Resposta do calor de chamadas (GET /heatmap).
+///
+/// [demo] vem do servidor e é a trava de honestidade: dado de demonstração
+/// nunca é apresentado como demanda real — o app marca a camada como DEMO e
+/// um backend de produção simplesmente não devolve o flag.
+class HeatSnapshot {
+  final List<HeatZone> zones;
+
+  /// Verdadeiro quando os números são de demonstração (não são demanda real).
+  final bool demo;
+
+  /// Momento em que o servidor gerou a leitura.
+  final DateTime? generatedAt;
+
+  const HeatSnapshot({
+    this.zones = const [],
+    this.demo = false,
+    this.generatedAt,
+  });
+
+  factory HeatSnapshot.fromJson(Map<String, dynamic> j) {
+    final zones = (j['zones'] as List?) ?? const [];
+    return HeatSnapshot(
+      zones: zones
+          .map((e) => HeatZone.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      demo: j['demo'] == true,
+      generatedAt: DateTime.tryParse(j['generated_at'] as String? ?? ''),
+    );
+  }
+}
+
 /// Gravação de segurança (POST /rides/{id}/recordings).
 class Recording {
   final String recordingId, kind, mime;
@@ -878,12 +910,9 @@ class ApiClient {
 
   // --- mapa: calor de chamadas ----------------------------------------
 
-  Future<List<HeatZone>> heatmap() async {
+  Future<HeatSnapshot> heatmap() async {
     final j = await _req('GET', '/heatmap');
-    final zones = (j['zones'] as List?) ?? const [];
-    return zones
-        .map((e) => HeatZone.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return HeatSnapshot.fromJson(j);
   }
 
   // --- gravações de segurança (vídeo opcional do parceiro) -------------
