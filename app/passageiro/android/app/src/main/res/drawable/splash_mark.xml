@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Marca do splash: o check branco do ícone, sem o círculo, para ficar
+     limpo sobre o fundo teal. Coordenadas extraídas de logo_icone.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="300dp"
+    android:height="300dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <group android:translateY="-10">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M121,260 a27,27 0 1,0 54,0 a27,27 0 1,0 -54,0" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M129.44,279.61 L204.44,350.61 L241.56,311.39 L166.56,240.39 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M196,331 a27,27 0 1,0 54,0 a27,27 0 1,0 -54,0" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M242.09,350.09 L386.61,188.61 L365.39,167.39 L203.91,311.91 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M361,178 a15,15 0 1,0 30,0 a15,15 0 1,0 -30,0" />
+    </group>
+</vector>
