@@ -35,6 +35,19 @@ void main() {
     });
   }
 
+  testWidgets('rodapé do cartão fica visível e o cartão ancora no rodapé',
+      (tester) async {
+    await pumpLogin(tester, const Size(411, 914));
+
+    final terms = find.text('Ao continuar você aceita os Termos de Uso.');
+    expect(terms, findsOneWidget);
+    expect(tester.getRect(terms).bottom, lessThanOrEqualTo(914),
+        reason: 'o rodapé não pode ser cortado pela borda da tela');
+    expect(tester.getTopLeft(find.text('Entrar ou criar conta')).dy,
+        greaterThan(914 * 0.55),
+        reason: 'o cartão deve ficar no rodapé, com o herói acima');
+  });
+
   testWidgets('teclado aberto esconde o carrossel e mantém o cartão',
       (tester) async {
     await pumpLogin(tester, const Size(360, 640));

@@ -37,6 +37,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
   String get _phoneDigits => _phone.text.replaceAll(RegExp(r'\D'), '');
 
+  /// Some com o erro assim que o usuário corrige o campo.
+  void _clearError() {
+    if (_error == null) return;
+    setState(() => _error = null);
+  }
+
   void _submitPhone() {
     if (_phoneDigits.length < 10) {
       setState(() => _error = 'Informe um celular com DDD.');
@@ -101,103 +107,84 @@ class _LoginScreenState extends State<LoginScreen> {
             SafeArea(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  // Com o teclado aberto a área útil encolhe; escondemos logo e
-                  // carrossel para o cartão e o campo ativo ficarem visíveis.
                   final logoWidth = (constraints.maxWidth * 0.55)
                       .clamp(180.0, 320.0)
                       .toDouble();
-                  final carouselHeight = (constraints.maxHeight * 0.42)
-                      .clamp(140.0, 360.0)
-                      .toDouble();
-                  // Reserva mínima para o cartão. O bloco (logo + carrossel)
-                  // nunca pode passar disso: é o que impede o RenderFlex de
-                  // estourar no frame em que o teclado abre.
-                  const cardMinHeight = 240.0;
-                  final blockMaxHeight = (constraints.maxHeight - cardMinHeight)
-                      .clamp(0.0, double.infinity)
-                      .toDouble();
+                  final card = _AuthCard(
+                    step: _step,
+                    phone: _phone,
+                    otp: _otp,
+                    busy: _busy,
+                    error: _error,
+                    onSubmitPhone: _submitPhone,
+                    onSubmitOtp: _submitOtp,
+                    onChangeStep: (s) => setState(() {
+                      _step = s;
+                      _error = null;
+                    }),
+                    onClearError: _clearError,
+                  );
 
                   return Column(
                     children: [
-                      ConstrainedBox(
-                        constraints: BoxConstraints(maxHeight: blockMaxHeight),
-                        child: AnimatedSize(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
-                          alignment: Alignment.topCenter,
-                          clipBehavior: Clip.hardEdge,
-                          child: keyboard
-                              ? const SizedBox(width: double.infinity)
-                              : OverflowBox(
-                                  // O bloco tem altura natural (logo + carrossel).
-                                  // O Clip do AnimatedSize corta o excedente sem
-                                  // fazer o Column interno estourar no frame em
-                                  // que o teclado abre.
-                                  alignment: Alignment.topCenter,
-                                  maxHeight: double.infinity,
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          top: AppSpace.l,
-                                          bottom: AppSpace.m,
-                                        ),
-                                        child: Image.asset(
-                                          dark
-                                              ? AppAssets.logoBranco
-                                              : AppAssets.logoTransparente,
-                                          width: logoWidth,
-                                          errorBuilder: (_, __, ___) => Icon(
-                                            Icons.verified,
-                                            size: logoWidth * 0.18,
-                                            color: t.primary,
-                                          ),
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        height: carouselHeight,
-                                        child: const CarouselDestaques(),
-                                      ),
-                                    ],
-                                  ),
+                      // O herói ocupa todo o espaço que sobra acima do cartão.
+                      // O cartão mede a si mesmo: nada de altura reservada
+                      // chutada (era o que cortava o rodapé).
+                      if (!keyboard)
+                        Expanded(
+                          child: Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  top: AppSpace.l,
+                                  bottom: AppSpace.m,
                                 ),
-                        ),
-                      ),
-                      Expanded(
-                        child: LayoutBuilder(
-                          builder: (context, cardConstraints) {
-                            return SingleChildScrollView(
-                              physics: const ClampingScrollPhysics(),
-                              child: ConstrainedBox(
-                                // Com o teclado aberto o cartão encosta nele,
-                                // em vez de ficar no topo com um vazio.
-                                constraints: BoxConstraints(
-                                  minHeight: cardConstraints.maxHeight,
-                                ),
-                                child: Align(
-                                  alignment: keyboard
-                                      ? Alignment.bottomCenter
-                                      : Alignment.topCenter,
-                                  child: _AuthCard(
-                                    step: _step,
-                                    phone: _phone,
-                                    otp: _otp,
-                                    busy: _busy,
-                                    error: _error,
-                                    onSubmitPhone: _submitPhone,
-                                    onSubmitOtp: _submitOtp,
-                                    onChangeStep: (s) => setState(() {
-                                      _step = s;
-                                      _error = null;
-                                    }),
+                                child: Image.asset(
+                                  dark
+                                      ? AppAssets.logoBranco
+                                      : AppAssets.logoTransparente,
+                                  width: logoWidth,
+                                  errorBuilder: (_, __, ___) => Icon(
+                                    Icons.verified,
+                                    size: logoWidth * 0.18,
+                                    color: t.primary,
                                   ),
                                 ),
                               ),
-                            );
-                          },
+                              const Expanded(child: CarouselDestaques()),
+                            ],
+                          ),
                         ),
-                      ),
+                      // Com o teclado aberto o herói sai de cena e o cartão
+                      // encosta nele, rolável se o passo for mais alto.
+                      if (keyboard)
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder: (context, cardConstraints) {
+                              return SingleChildScrollView(
+                                physics: const ClampingScrollPhysics(),
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    minHeight: cardConstraints.maxHeight,
+                                  ),
+                                  child: Align(
+                                    alignment: Alignment.bottomCenter,
+                                    child: ConstrainedBox(
+                                      constraints:
+                                          const BoxConstraints(maxWidth: 420),
+                                      child: card,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        )
+                      else
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 420),
+                          child: card,
+                        ),
                     ],
                   );
                 },
@@ -221,6 +208,7 @@ class _AuthCard extends StatelessWidget {
     required this.onSubmitPhone,
     required this.onSubmitOtp,
     required this.onChangeStep,
+    required this.onClearError,
   });
 
   final int step;
@@ -229,6 +217,7 @@ class _AuthCard extends StatelessWidget {
   final String? error;
   final VoidCallback onSubmitPhone, onSubmitOtp;
   final ValueChanged<int> onChangeStep;
+  final VoidCallback onClearError;
 
   @override
   Widget build(BuildContext context) {
@@ -261,18 +250,16 @@ class _AuthCard extends StatelessWidget {
                 TextField(
                   controller: phone,
                   keyboardType: TextInputType.phone,
-                  autofocus: true,
-                  decoration: const InputDecoration(
+                  onChanged: (_) => onClearError(),
+                  decoration: InputDecoration(
                     labelText: 'Celular',
                     hintText: '(69) 9 9999-9999',
-                    prefixIcon: Icon(Icons.phone_iphone),
+                    prefixIcon: const Icon(Icons.phone_iphone),
+                    errorText: error,
+                    errorMaxLines: 2,
                   ),
                   onSubmitted: (_) => onSubmitPhone(),
                 ),
-                if (error != null) ...[
-                  const SizedBox(height: AppSpace.s),
-                  Text(error!, style: TextStyle(color: t.danger)),
-                ],
                 const SizedBox(height: AppSpace.l),
                 GradientButton(
                     onPressed: onSubmitPhone, child: const Text('CONTINUAR')),
@@ -293,11 +280,14 @@ class _AuthCard extends StatelessWidget {
                     icon: const Icon(Icons.arrow_back),
                   ),
                   const SizedBox(width: AppSpace.xs),
-                  Text('Código de verificação',
-                      style: AppType.title.copyWith(color: t.ink)),
+                  Expanded(
+                    child: Text('Código de verificação',
+                        style: AppType.title.copyWith(color: t.ink)),
+                  ),
                 ]),
                 const SizedBox(height: AppSpace.xs),
-                Text('Enviamos um SMS para ${phone.text}',
+                Text(
+                    'Enviamos um SMS para ${phone.text.replaceAll(RegExp(r'\D'), '')}',
                     style: AppType.label.copyWith(color: t.muted)),
                 const SizedBox(height: AppSpace.l),
                 TextField(
@@ -307,26 +297,25 @@ class _AuthCard extends StatelessWidget {
                   autofocus: true,
                   textAlign: TextAlign.center,
                   style: AppType.display.copyWith(letterSpacing: 12),
-                  decoration: const InputDecoration(
+                  onChanged: (_) => onClearError(),
+                  decoration: InputDecoration(
                     counterText: '',
                     hintText: '••••',
-                    prefixIcon: Icon(Icons.sms_outlined),
+                    prefixIcon: const Icon(Icons.sms_outlined),
+                    errorText: error,
+                    errorMaxLines: 2,
                   ),
                   onSubmitted: (_) => onSubmitOtp(),
                 ),
-                if (error != null) ...[
-                  const SizedBox(height: AppSpace.s),
-                  Text(error!, style: TextStyle(color: t.danger)),
-                ],
                 const SizedBox(height: AppSpace.l),
                 GradientButton(
                   onPressed: busy ? null : onSubmitOtp,
                   child: busy
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 22,
                           height: 22,
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
+                              strokeWidth: 2, color: t.ink))
                       : const Text('ENTRAR'),
                 ),
                 const SizedBox(height: AppSpace.s),
