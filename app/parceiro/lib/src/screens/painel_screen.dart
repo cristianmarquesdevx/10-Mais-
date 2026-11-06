@@ -2,14 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../../main.dart';
 import '../api/client.dart';
-import '../assets/app_assets.dart';
 import '../state/partner_controller.dart';
 import '../theme/theme.dart';
 import '../widgets/heatmap_map.dart';
+import '../widgets/wallet_balance_card.dart';
 
 /// P2 Painel — o mapa ocupa a tela inteira e os controles flutuam sobre ele
-/// (ADX-UX-2). No topo ficam menu, marca, modo, status e zonas quentes; no
-/// rodapé, um painel flutuante com passe, carteira e o CTA ONLINE/OFFLINE.
+/// (ADX-UX-2). O topo é minimalista: **só** o menu e o saldo flutuante do
+/// motorista. O status (online/offline) fica no CTA do painel flutuante e na
+/// cor do marcador no mapa; passe/comissão ficam no painel inferior.
 ///
 /// Oferta que chega durante ONLINE navega para P3; corrida ativa reabre P4.
 /// KYC não aprovado (F9) dirige ao onboarding.
@@ -31,12 +32,33 @@ class _PainelScreenState extends State<PainelScreen> {
   bool _loaded = false;
   HeatSnapshot _heat = const HeatSnapshot();
 
+  /// Controller em cache: `dispose` não pode consultar o InheritedWidget
+  /// (dependência depois do descarte é erro em debug).
+  PartnerController? _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    // O saldo é lido continuamente enquanto esta tela está aberta (e só
+    // enquanto ela está aberta: nada de poll em segundo plano).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _controller?.startWalletLive();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller?.stopWalletLive();
+    super.dispose();
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final p = AppScope.of(context);
+    _controller = p;
     if (!_loaded) {
       _loaded = true;
-      final p = AppScope.of(context);
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) p.loadMe();
@@ -102,38 +124,34 @@ class _PainelScreenState extends State<PainelScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // --- topo flutuante: menu + marca + modo ---
+                // --- topo minimalista: menu + saldo flutuante ---
+                // Todo chip saiu do topo: o status está no CTA e na cor do
+                // marcador; passe/comissão, no painel inferior. O saldo é o
+                // único número que o motorista precisa ver sem abrir nada.
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
                       AppSpace.l, AppSpace.s, AppSpace.l, 0),
-                  child: Row(children: [
-                    if (widget.onMenu != null)
-                      _RoundGlassButton(
-                        icon: Icons.menu_rounded,
-                        tooltip: 'Menu',
-                        onTap: widget.onMenu!,
-                      )
-                    else
-                      const SizedBox(width: AppSpace.target),
-                    const SizedBox(width: AppSpace.s),
-                    const _BrandChip(),
-                    const Spacer(),
-                    _ModeChip(mode: p.mode),
-                  ]),
-                ),
-                const SizedBox(height: AppSpace.s),
-                // --- pills de status e calor sobre o mapa ---
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.l),
-                  child: Row(children: [
-                    _StatusPill(
-                      status: p.status,
-                      breakRemaining: p.breakRemainingSeconds,
-                    ),
-                    const Spacer(),
-                    if (_heat.zones.isNotEmpty)
-                      _HeatPill(zones: _heat.zones.length, demo: _heat.demo),
-                  ]),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (widget.onMenu != null)
+                        _RoundGlassButton(
+                          icon: Icons.menu_rounded,
+                          tooltip: 'Menu',
+                          onTap: widget.onMenu!,
+                        )
+                      else
+                        const SizedBox(width: AppSpace.target),
+                      const Spacer(),
+                      WalletBalanceCard(
+                        balance: p.walletBalance,
+                        updatedAt: p.walletUpdatedAt,
+                        loading: p.walletLoading,
+                        stale: p.walletStale,
+                        onTap: () => Navigator.pushNamed(context, '/carteira'),
+                      ),
+                    ],
+                  ),
                 ),
                 const Spacer(),
                 // --- avisos críticos (bloqueio/erro): flutuam acima do dock ---
@@ -151,6 +169,18 @@ class _PainelScreenState extends State<PainelScreen> {
                         onTap: () =>
                             Navigator.pushNamed(context, '/onboarding')),
                   ),
+                // --- estado da camada de demanda (fora do topo) ---
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                      AppSpace.l, 0, AppSpace.l, AppSpace.s),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _HeatPill(
+                      zones: _heat.zones.length,
+                      demo: _heat.demo,
+                    ),
+                  ),
+                ),
                 // --- painel de controle flutuante ---
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
@@ -236,146 +266,7 @@ class _RoundGlassButton extends StatelessWidget {
   }
 }
 
-class _BrandChip extends StatelessWidget {
-  const _BrandChip();
-
-  @override
-  Widget build(BuildContext context) {
-    final t = tokensOf(context);
-    return Container(
-      height: AppSpace.target,
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
-      decoration: _floatingDecoration(context, radius: AppSpace.radiusChip),
-      child: Row(children: [
-        Icon(Icons.add, size: 16, color: t.primary),
-        const SizedBox(width: 4),
-        Image.asset(
-          AppAssets.logoIcone,
-          height: 15,
-          errorBuilder: (_, __, ___) => Icon(Icons.verified, size: 15, color: t.primary),
-        ),
-      ]),
-    );
-  }
-}
-
-class _ModeChip extends StatelessWidget {
-  const _ModeChip({required this.mode});
-  final String? mode;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = tokensOf(context);
-    final passe = mode == 'PASSE_ATIVO';
-    return Container(
-      height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
-      alignment: Alignment.center,
-      decoration: passe
-          ? BoxDecoration(
-              color: t.primary,
-              borderRadius: BorderRadius.circular(AppSpace.radiusChip),
-              boxShadow: [
-                BoxShadow(
-                    color: t.primary.withValues(alpha: 0.35),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4)),
-              ],
-            )
-          : _floatingDecoration(context, radius: AppSpace.radiusChip),
-      child: Text(
-        passe ? 'PASSE · 100% seu' : 'COMISSÃO 12%',
-        style: TextStyle(
-          fontWeight: FontWeight.w700,
-          fontSize: 12,
-          letterSpacing: 0.2,
-          color: passe ? t.ink : t.muted,
-        ),
-      ),
-    );
-  }
-}
-
-/// Pill de status com 4 estados: OFFLINE / ONLINE / PAUSED / EM CORRIDA.
-class _StatusPill extends StatelessWidget {
-  const _StatusPill({
-    required this.status,
-    this.breakRemaining,
-  });
-  final PartnerStatus status;
-  final int? breakRemaining;
-
-  Color _dotColor(ColorSchemeColorTokens t) {
-    switch (status) {
-      case PartnerStatus.online:
-        return t.primary;
-      case PartnerStatus.paused:
-        return t.warning;
-      case PartnerStatus.emCorrida:
-        return t.earn;
-      case PartnerStatus.offline:
-        return t.hairline;
-    }
-  }
-
-  String _label(int? br) {
-    switch (status) {
-      case PartnerStatus.online:
-        return 'ONLINE';
-      case PartnerStatus.paused:
-        return br != null ? 'PAUSA ${_mmss(br)}' : 'PAUSA';
-      case PartnerStatus.emCorrida:
-        return 'EM CORRIDA';
-      case PartnerStatus.offline:
-        return 'OFFLINE';
-    }
-  }
-
-  String _mmss(int total) {
-    final m = total ~/ 60;
-    final s = total % 60;
-    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final t = tokensOf(context);
-    final dot = _dotColor(t);
-    final live = status != PartnerStatus.offline;
-    return Container(
-      height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
-      decoration: _floatingDecoration(context, radius: AppSpace.radiusChip),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: 9,
-          height: 9,
-          decoration: BoxDecoration(
-            color: dot,
-            shape: BoxShape.circle,
-            boxShadow: live
-                ? [
-                    BoxShadow(
-                        color: dot.withValues(alpha: 0.7),
-                        blurRadius: 7,
-                        spreadRadius: 1)
-                  ]
-                : null,
-          ),
-        ),
-        const SizedBox(width: 7),
-        Text(_label(breakRemaining),
-            style: TextStyle(
-                color: t.ink,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6)),
-      ]),
-    );
-  }
-}
-
-/// Estado da camada de demanda.
+/// Estado da camada de demanda, mostrado fora do topo.
 ///
 /// Regra de honestidade: quando não há dado real, o app **diz que não há** —
 /// nunca inventa número. Dado de demonstração vem marcado como DEMO.
@@ -401,7 +292,7 @@ class _HeatPill extends StatelessWidget {
         : demo
             ? Icons.science_outlined
             : Icons.local_fire_department;
-    final iconColor = empty ? t.muted : t.warning;
+    final iconColor = empty ? t.muted : (demo ? t.warning : t.warning);
     return Semantics(
       label: empty
           ? 'Sem dados de demanda no momento'
@@ -443,10 +334,10 @@ class _ControlDock extends StatelessWidget {
 
   final PartnerController controller;
   final PartnerInfo? info;
-  final String Function(int) formatSeconds;
 
   /// Horário do servidor da leitura de demanda ("HH:MM"), quando existe.
   final String? demandAt;
+  final String Function(int) formatSeconds;
 
   String _shortDate(DateTime d) {
     final local = d.toLocal();
@@ -462,7 +353,7 @@ class _ControlDock extends StatelessWidget {
     final passExpires = info?.passExpiresAt;
     final passActive =
         passExpires != null && passExpires.isAfter(DateTime.now());
-    final wallet = info?.walletBalance;
+    final wallet = controller.walletBalance ?? info?.walletBalance;
     final debtCents = info?.debtCents ?? 0;
 
     return Container(

@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart' show LocationAccuracy;
 
 import '../api/client.dart';
 import '../api/presence_api.dart';
+import '../api/wallet_source.dart';
 import '../location/location_service.dart';
 
 /// Estado operacional do parceiro (SPECS §5.3): OFFLINE | ONLINE | PAUSED | EM_CORRIDA.
@@ -23,8 +24,10 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
     this.maxBreakMinutes = 180, // pausa máxima: 3 horas (configurável)
     PresenceApi? presence,
     LocationService location = const LocationService(),
+    WalletBalanceSource? walletSource,
   })  : _presence = presence ?? PresenceApi(),
-        _location = location {
+        _location = location,
+        _walletSourceOverride = walletSource {
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -35,6 +38,13 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
   /// Presença real (radar): status + posição publicados no backend.
   final PresenceApi _presence;
   final LocationService _location;
+  final WalletBalanceSource? _walletSourceOverride;
+
+  /// Fonte do saldo da carteira. Poll agora; Realtime (Supabase) depois, sem
+  /// mudar a tela.
+  WalletBalanceSource get walletSource =>
+      _walletSourceOverride ?? ApiWalletBalanceSource(api);
+
   GeoPoint? _lastPosition;
   Timer? _heartbeat;
 
@@ -44,6 +54,35 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
   List<Offer> offers = [];
   bool busy = false;
   String? lastErrorCode; // decisão de UI por code (problem+json)
+
+  // --- saldo da carteira (leitura contínua) -------------------------------
+  //
+  // O saldo é do servidor. A tela do painel liga a leitura enquanto está
+  // aberta (startWalletLive) e desliga ao sair (stopWalletLive): nada fica
+  // consumindo bateria em segundo plano.
+
+  /// Último saldo conhecido (reais). Null enquanto nunca foi lido.
+  double? walletBalance;
+
+  /// Momento da última leitura bem-sucedida (relógio do aparelho).
+  DateTime? walletUpdatedAt;
+
+  /// Primeira carga em andamento — a tela mostra shimmer, nunca "—".
+  bool walletLoading = true;
+
+  /// A última leitura falhou: o valor exibido é o último conhecido.
+  bool walletStale = false;
+
+  /// Código do último erro de leitura (a UI decide o aviso discreto).
+  String? walletErrorCode;
+
+  Timer? _walletTimer;
+  bool _walletLive = false;
+
+  /// Intervalo de leitura: curto online (o saldo muda ao fechar corrida),
+  /// longo offline (só para manter o valor fresco na volta).
+  static const walletPollOnline = Duration(seconds: 15);
+  static const walletPollOffline = Duration(seconds: 60);
 
   // --- pausa ---
   DateTime? _breakStartedAt; // horário de início da pausa (relógio do servidor)
@@ -123,6 +162,70 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> loadMe() => _guard(() async {
         me = await api.me();
       });
+
+  // --- saldo da carteira (leitura contínua) -------------------------------
+  //
+  // O valor é sempre do servidor. A tela do painel liga a leitura enquanto
+  // está aberta e desliga ao sair — nada fica consumindo bateria em segundo
+  // plano.
+
+  /// Liga a leitura contínua do saldo. Chamar quando a tela que mostra o
+  /// saldo entra; desligar com [stopWalletLive] quando sair.
+  void startWalletLive() {
+    if (_walletLive) return;
+    _walletLive = true;
+    refreshWallet();
+    _scheduleWalletTick(_walletInterval);
+  }
+
+  /// Desliga a leitura contínua (a tela saiu).
+  void stopWalletLive() {
+    _walletLive = false;
+    _walletTimer?.cancel();
+    _walletTimer = null;
+  }
+
+  /// Online o saldo muda com frequência (fim de corrida); offline, basta
+  /// manter o valor fresco para a próxima abertura.
+  Duration get _walletInterval =>
+      status == PartnerStatus.online ? walletPollOnline : walletPollOffline;
+
+  void _scheduleWalletTick(Duration delay) {
+    _walletTimer?.cancel();
+    if (!_walletLive || _disposed) return;
+    _walletTimer = Timer(delay, () async {
+      await refreshWallet();
+      _scheduleWalletTick(_walletInterval);
+    });
+  }
+
+  /// Lê o saldo agora. Falha não derruba a tela: o valor continua sendo
+  /// exibido, marcado como antigo (stale), com o horário da última leitura.
+  Future<void> refreshWallet() async {
+    if (_disposed) return;
+    try {
+      final value = await walletSource.fetchBalance();
+      if (_disposed) return;
+      walletBalance = value;
+      walletUpdatedAt = DateTime.now();
+      walletLoading = false;
+      walletStale = false;
+      walletErrorCode = null;
+      notifyListeners();
+    } on ApiProblem catch (p) {
+      if (_disposed) return;
+      walletLoading = false;
+      walletStale = true;
+      walletErrorCode = p.code;
+      notifyListeners();
+    } catch (_) {
+      if (_disposed) return;
+      walletLoading = false;
+      walletStale = true;
+      walletErrorCode = 'offline';
+      notifyListeners();
+    }
+  }
 
   /// P2 → ONLINE. 403 kyc_not_approved vira lastErrorCode (tela leva ao
   /// onboarding); servidor manda (nunca confiar no gate local).
@@ -313,6 +416,16 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
       refreshOffers();
       _startPolling();
     }
+    // O saldo só é lido com a tela do painel aberta: em background o timer
+    // é suspenso (bateria) e retomado na volta.
+    if (state == AppLifecycleState.resumed && _walletLive) {
+      refreshWallet();
+      _scheduleWalletTick(_walletInterval);
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _walletTimer?.cancel();
+      _walletTimer = null;
+    }
   }
 
   /// Atualiza o cronômetro de pausa a cada segundo (apenas UI local; o
@@ -400,6 +513,9 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
           ride = null;
           _startPolling();
           await _resumePresence();
+          // A corrida credita/debita a carteira: o saldo exibido no painel
+          // precisa refletir o novo valor imediatamente.
+          await refreshWallet();
         }
       });
 
@@ -449,6 +565,7 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
     _stopPolling();
     _heartbeat?.cancel();
     _breakTimer?.cancel();
+    stopWalletLive();
     super.dispose();
   }
 }

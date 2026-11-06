@@ -47,5 +47,16 @@ class ThemePrefs {
 final ValueNotifier<ThemeModePref> themeModeNotifier =
     ValueNotifier<ThemeModePref>(ThemeModePref.light);
 
-/// Formata BRL com 2 casas (nunca "R$ 10"). Usa vírgula decimal pt-BR.
-String brl(num v) => 'R\$ ${v.toStringAsFixed(2).replaceAll('.', ',')}';
+/// Formata BRL com 2 casas e separador de milhar no padrão pt-BR
+/// ("R$ 1.234,56"). Sem ICU: o formato é fixo e não muda com o locale do
+/// aparelho — o valor no cartão de saldo precisa ser sempre legível.
+String brl(num v) {
+  final neg = v < 0;
+  final cents = (v.abs() * 100).round();
+  final reais = cents ~/ 100;
+  final centavos = cents % 100;
+  final miles = reais ~/ 1000;
+  final resto = (reais % 1000).toString().padLeft(3, '0');
+  final inteiro = miles > 0 ? '$miles.$resto' : reais.toString();
+  return '${neg ? '-' : ''}R\$ $inteiro,${centavos.toString().padLeft(2, '0')}';
+}
