@@ -6,6 +6,7 @@ import '../../main.dart';
 import '../api/client.dart';
 import '../theme/theme.dart';
 import '../widgets/scratch_card.dart';
+import 'widgets/raspadinha_onboarding.dart';
 
 /// Tela de campanhas de raspadinha disponíveis (3.8).
 class ScratchCampaignsScreen extends StatefulWidget {
@@ -28,6 +29,17 @@ class _ScratchCampaignsScreenState extends State<ScratchCampaignsScreen> {
     if (_loaded) return;
     _loaded = true;
     _load();
+    _abrirOnboardingSePrecisa();
+  }
+
+  /// M5: na primeira visita (por versão de conteúdo) o onboarding abre sozinho.
+  /// Qualquer forma de fechar (Pular, Começar ou voltar) grava o flag — só
+  /// depois que a rota é fechada, então fechar o app no meio não conta.
+  Future<void> _abrirOnboardingSePrecisa() async {
+    if (!await RaspadinhaOnboardingPrefs.precisaMostrar()) return;
+    if (!mounted) return;
+    await RaspadinhaOnboardingScreen.abrir(context);
+    await RaspadinhaOnboardingPrefs.marcarVisto();
   }
 
   Future<void> _load() async {
@@ -50,6 +62,12 @@ class _ScratchCampaignsScreenState extends State<ScratchCampaignsScreen> {
       backgroundColor: t.background,
       appBar: AppBar(
         title: Text('Raspadinha de Prêmios', style: titleStyle(context)),
+        actions: [
+          TextButton(
+            onPressed: () => RaspadinhaOnboardingScreen.abrir(context),
+            child: const Text('Como funciona'),
+          ),
+        ],
       ),
       body: _buildBody(t),
     );
