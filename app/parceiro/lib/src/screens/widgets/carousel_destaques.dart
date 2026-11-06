@@ -51,7 +51,10 @@ class _CarouselDestaquesState extends State<CarouselDestaques>
     '05_premio_na_conta': 'Prêmio direto na conta',
   };
 
-  final _controller = PageController(viewportFraction: 0.78);
+  final _controller = PageController(viewportFraction: _viewportFraction);
+  static const _viewportFraction = 0.78;
+  static const _dotsHeight = 14.0;
+  static const _dotSize = 6.0;
   Timer? _autoplay;
   int _page = 0;
   bool _reduceMotion = false;
@@ -189,79 +192,101 @@ class _CarouselDestaquesState extends State<CarouselDestaques>
         onPointerDown: _onPointerDown,
         onPointerUp: _onPointerEnd,
         onPointerCancel: _onPointerEnd,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Positioned.fill(
-              bottom: 14,
-              child: PageView.builder(
-                controller: _controller,
-                itemCount: paths.length,
-                onPageChanged: (i) => setState(() => _page = i),
-                itemBuilder: (context, index) {
-                  final path = paths[index];
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: Center(
-                      child: AspectRatio(
-                        aspectRatio: 1080 / 1230,
-                        child: ColoredBox(
-                          // No tema escuro a arte clara precisa de um fundo
-                          // claro; no claro o degradê da tela já é o fundo.
-                          color: dark
-                              ? const Color(0xFFF2FBF8)
-                              : Colors.transparent,
-                          child: Image.asset(
-                            path,
-                            fit: BoxFit.contain,
-                            filterQuality: FilterQuality.medium,
-                            semanticLabel: _labelFor(path),
-                            errorBuilder: (_, __, ___) => Icon(
-                              Icons.image_outlined,
-                              color: t.muted,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // A arte é um pôster 1080x1230 dentro de uma página que mostra
+            // 78% da largura, com 6 px de folga lateral.
+            final pageWidth = constraints.maxWidth * _viewportFraction;
+            final artWidth = (pageWidth - 12).clamp(0.0, double.infinity);
+            final artHeight = artWidth * (1230 / 1080);
+            // Faixa reservada embaixo para os indicadores de página.
+            final pageAreaHeight =
+                (constraints.maxHeight - _dotsHeight)
+                    .clamp(0.0, double.infinity);
+            // A arte é centralizada na página: a sobra fica metade em cima e
+            // metade embaixo. Os indicadores acompanham a borda inferior da
+            // arte, em vez de flutuar soltos colados no cartão de login.
+            final shownArtHeight =
+                artHeight < pageAreaHeight ? artHeight : pageAreaHeight;
+            final slack = (pageAreaHeight - shownArtHeight) / 2;
+
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                Positioned.fill(
+                  bottom: _dotsHeight,
+                  child: PageView.builder(
+                    controller: _controller,
+                    itemCount: paths.length,
+                    onPageChanged: (i) => setState(() => _page = i),
+                    itemBuilder: (context, index) {
+                      final path = paths[index];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: Center(
+                          child: AspectRatio(
+                            aspectRatio: 1080 / 1230,
+                            child: ColoredBox(
+                              // No tema escuro a arte clara precisa de um fundo
+                              // claro; no claro o degradê da tela já é o fundo.
+                              color: dark
+                                  ? const Color(0xFFF2FBF8)
+                                  : Colors.transparent,
+                              child: Image.asset(
+                                path,
+                                fit: BoxFit.contain,
+                                filterQuality: FilterQuality.medium,
+                                semanticLabel: _labelFor(path),
+                                errorBuilder: (_, __, ___) => Icon(
+                                  Icons.image_outlined,
+                                  color: t.muted,
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-            // Indicador de página: ativo teal alongado, inativo cinza.
-            // Com um único pôster não há paginação: o ponto solitário só
-            // sugere que falta carregar algo.
-            if (paths.length > 1)
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: Semantics(
-                  // `container` impede o rótulo de fundir com o do carrossel.
-                  container: true,
-                  label: 'Página ${_page + 1} de ${paths.length}',
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: List.generate(paths.length, (i) {
-                      final active = i == _page;
-                      return AnimatedContainer(
-                        duration: _reduceMotion
-                            ? Duration.zero
-                            : const Duration(milliseconds: 220),
-                        curve: Curves.easeOut,
-                        margin: const EdgeInsets.symmetric(horizontal: 3),
-                        width: active ? 18 : 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: active
-                              ? t.primary
-                              : t.hairline.withValues(alpha: 0.9),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
                       );
-                    }),
+                    },
                   ),
                 ),
-              ),
-          ],
+                // Indicador de página: ativo teal alongado, inativo cinza.
+                // Com um único pôster não há paginação: o ponto solitário só
+                // sugere que falta carregar algo.
+                if (paths.length > 1)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: slack + (_dotsHeight - _dotSize),
+                    child: Semantics(
+                      // `container` impede o rótulo de fundir com o do carrossel.
+                      container: true,
+                      label: 'Página ${_page + 1} de ${paths.length}',
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(paths.length, (i) {
+                          final active = i == _page;
+                          return AnimatedContainer(
+                            duration: _reduceMotion
+                                ? Duration.zero
+                                : const Duration(milliseconds: 220),
+                            curve: Curves.easeOut,
+                            margin: const EdgeInsets.symmetric(horizontal: 3),
+                            width: active ? 18 : _dotSize,
+                            height: _dotSize,
+                            decoration: BoxDecoration(
+                              color: active
+                                  ? t.primary
+                                  : t.hairline.withValues(alpha: 0.9),
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
       ),
     );
