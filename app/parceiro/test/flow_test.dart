@@ -155,8 +155,8 @@ void main() {
     expect(done, isTrue);
   });
 
-  testWidgets('P2 painel: chip PASSE + PassCard + carteira para parceiro aprovado',
-      (tester) async {
+  testWidgets('P2 painel: passe no painel inferior + carteira para parceiro '
+      'aprovado (topo minimalista: sem chip de passe)', (tester) async {
     final (widget: app, partner: p) = buildApp(
       mock: MockClient((req) async {
         if (req.url.path.endsWith('/me')) return resp(mePartnerApproved, 200);
@@ -167,7 +167,9 @@ void main() {
     await tester.pumpWidget(app);
     await tester.pumpAndSettle();
 
-    expect(find.text('PASSE · 100% seu'), findsOneWidget);
+    // O chip de passe/comissão saiu do topo (Fase 1): a informação continua
+    // no cartão inferior.
+    expect(find.text('PASSE · 100% seu'), findsNothing);
     expect(find.textContaining('Passe ativo'), findsOneWidget);
     expect(find.textContaining('Carteira: R\$ 134,50'), findsOneWidget);
     expect(find.text('FICAR ONLINE'), findsOneWidget);
