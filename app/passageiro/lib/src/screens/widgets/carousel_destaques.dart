@@ -229,35 +229,38 @@ class _CarouselDestaquesState extends State<CarouselDestaques>
               ),
             ),
             // Indicador de página: ativo teal alongado, inativo cinza.
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Semantics(
-                // `container` impede o rótulo de fundir com o do carrossel.
-                container: true,
-                label: 'Página ${_page + 1} de ${paths.length}',
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(paths.length, (i) {
-                    final active = i == _page;
-                    return AnimatedContainer(
-                      duration: _reduceMotion
-                          ? Duration.zero
-                          : const Duration(milliseconds: 220),
-                      curve: Curves.easeOut,
-                      margin: const EdgeInsets.symmetric(horizontal: 3),
-                      width: active ? 18 : 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: active
-                            ? t.primary
-                            : t.hairline.withValues(alpha: 0.9),
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                    );
-                  }),
+            // Com um único pôster não há paginação: o ponto solitário só
+            // sugere que falta carregar algo.
+            if (paths.length > 1)
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Semantics(
+                  // `container` impede o rótulo de fundir com o do carrossel.
+                  container: true,
+                  label: 'Página ${_page + 1} de ${paths.length}',
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(paths.length, (i) {
+                      final active = i == _page;
+                      return AnimatedContainer(
+                        duration: _reduceMotion
+                            ? Duration.zero
+                            : const Duration(milliseconds: 220),
+                        curve: Curves.easeOut,
+                        margin: const EdgeInsets.symmetric(horizontal: 3),
+                        width: active ? 18 : 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: active
+                              ? t.primary
+                              : t.hairline.withValues(alpha: 0.9),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      );
+                    }),
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),

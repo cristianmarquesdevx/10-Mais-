@@ -73,11 +73,12 @@ void main() {
       find.bySemanticsLabel('Mais ganhos para o motorista'),
       findsOneWidget,
     );
-    expect(find.bySemanticsLabel('Página 1 de 1'), findsOneWidget);
+    expect(find.bySemanticsLabel('Página 1 de 1'), findsNothing,
+        reason: 'um pôster só não tem paginação');
 
     // Um único item: não há para onde avançar.
     await tester.pump(const Duration(seconds: 8));
-    expect(find.bySemanticsLabel('Página 1 de 1'), findsOneWidget);
+    expect(find.bySemanticsLabel('Página 1 de 1'), findsNothing);
   });
 
   semanticsTest('avança sozinho a cada 4 s', (tester) async {
@@ -152,13 +153,13 @@ void main() {
   });
 
   semanticsTest('expõe rótulos para o leitor de tela', (tester) async {
-    await pumpCarousel(tester);
+    await pumpCarousel(tester, items: multiItems);
 
     expect(find.bySemanticsLabel('Destaques do 10 é Mais'), findsOneWidget);
     expect(
-      find.bySemanticsLabel('Mais ganhos para o motorista'),
+      find.bySemanticsLabel('Sua corrida em segundos'),
       findsOneWidget,
     );
-    expect(find.bySemanticsLabel('Página 1 de 1'), findsOneWidget);
+    expect(find.bySemanticsLabel('Página 1 de 5'), findsOneWidget);
   });
 }
