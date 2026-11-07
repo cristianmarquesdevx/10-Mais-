@@ -153,6 +153,18 @@ class _PainelScreenState extends State<PainelScreen> {
                     ],
                   ),
                 ),
+                // Selo "DEMO" da camada de demanda: logo abaixo da linha de
+                // controles, no mesmo fluxo — não pode cair por baixo do
+                // cartão de saldo (topo direito).
+                if (_heat.demo && _heat.zones.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                        AppSpace.l, AppSpace.s, AppSpace.l, 0),
+                    child: const Align(
+                      alignment: Alignment.centerLeft,
+                      child: DemoHeatBadge(),
+                    ),
+                  ),
                 const Spacer(),
                 // --- avisos críticos (bloqueio/erro): flutuam acima do dock ---
                 if (p.lastErrorCode != null)
@@ -306,12 +318,18 @@ class _HeatPill extends StatelessWidget {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(icon, color: iconColor, size: 16),
           const SizedBox(width: AppSpace.xs),
-          Text(
-            label,
-            style: TextStyle(
-              color: empty ? t.muted : t.ink,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+          // Texto flexível: em tela estreita (ou com fonte maior) o rótulo
+          // encolhe com reticências em vez de estourar a linha.
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: empty ? t.muted : t.ink,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ]),

@@ -223,6 +223,43 @@ void main() {
     p.dispose();
   });
 
+  testWidgets('Demanda: o selo DEMO não fica embaixo do cartão de saldo',
+      (tester) async {
+    // Tela de celular real (393 x 873 dp): é nela que o selo centralizado
+    // no topo caía por baixo do cartão de saldo e era cortado.
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+
+    final (widget: app, partner: p) = buildApp(
+      mock: MockClient((req) async {
+        if (req.url.path.endsWith('/me')) return resp(mePartner, 200);
+        if (req.url.path.endsWith('/partner/wallet')) {
+          return resp('{"balance":134.5,"debt_cents":0,"statement":[]}', 200);
+        }
+        if (req.url.path.endsWith('/heatmap')) return resp(heatDemo, 200);
+        return resp('{}', 200);
+      }),
+    );
+
+    await tester.pumpWidget(app);
+    await pumpFrames(tester);
+
+    // O selo e o cartão são irmãos no topo: se o selo descer o bastante,
+    // um pode cobrir o outro e o texto fica cortado (foi o que aconteceu
+    // com a posição fracionária antiga).
+    final selo = tester.getRect(find.text('DEMO · dados simulados'));
+    final cartao = tester.getRect(find.byType(WalletBalanceCard));
+
+    final sobrepoe =
+        selo.left < cartao.right && selo.right > cartao.left &&
+            selo.top < cartao.bottom && selo.bottom > cartao.top;
+    expect(sobrepoe, isFalse,
+        reason: 'selo $selo colide com o cartão de saldo $cartao');
+
+    p.dispose();
+  });
+
   testWidgets('Demanda: sem dado real o app diz que não tem dado',
       (tester) async {
     final (widget: app, partner: p) = buildApp(

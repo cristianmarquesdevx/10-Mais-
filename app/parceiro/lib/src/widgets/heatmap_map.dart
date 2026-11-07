@@ -36,6 +36,7 @@ class HeatmapMap extends StatefulWidget {
 
   /// Os números da camada são de demonstração (o servidor sinalizou).
   /// O mapa ganha uma marca d'água — dado simulado nunca passa por real.
+  /// O selo legível fica fora do mapa: ver [DemoHeatBadge].
   final bool demo;
 
   @override
@@ -176,7 +177,8 @@ class _HeatmapMapState extends State<HeatmapMap>
           // Honestidade do dado: se o servidor marcou a camada como
           // demonstração, o mapa inteiro ganha a marca d'água. Dado simulado
           // nunca passa por real. Sem zonas não há o que marcar.
-          if (widget.demo && widget.zones.isNotEmpty) const _DemoWatermark(),
+          if (widget.demo && widget.zones.isNotEmpty)
+            const _DemoWatermark(),
         ],
       ),
     );
@@ -222,44 +224,63 @@ class _DemoWatermark extends StatelessWidget {
                     ),
                   ),
                 ),
-              // Selo legível no topo do mapa.
-              Align(
-                alignment: const Alignment(0, -0.86),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: t.surface.withValues(alpha: dark ? 0.88 : 0.94),
-                    borderRadius: BorderRadius.circular(AppSpace.radiusChip),
-                    border: Border.all(
-                      color: t.warning.withValues(alpha: 0.55),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpace.m,
-                      vertical: AppSpace.xs,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.science_outlined,
-                            size: 14, color: t.warning),
-                        const SizedBox(width: AppSpace.xs),
-                        Text(
-                          'DEMO · dados simulados',
-                          style: TextStyle(
-                            color: t.ink,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.4,
-                          ),
-                        ),
-                      ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Selo "DEMO · dados simulados" da camada de demanda.
+///
+/// Fica **fora** do mapa: dentro dele, a posição era uma fração da altura e
+/// o selo caía por baixo do cartão de saldo (topo direito), ficando cortado.
+/// Quem usa o mapa coloca o selo no fluxo da própria tela, logo abaixo da
+/// linha de controles — assim a sobreposição é impossível por construção.
+class DemoHeatBadge extends StatelessWidget {
+  const DemoHeatBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    return Semantics(
+      label: 'Camada de demanda em modo demonstração: dados simulados',
+      child: ExcludeSemantics(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: t.surface.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(AppSpace.radiusChip),
+            border: Border.all(
+              color: t.warning.withValues(alpha: 0.55),
+              width: 1.5,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.m,
+              vertical: AppSpace.xs,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.science_outlined, size: 14, color: t.warning),
+                const SizedBox(width: AppSpace.xs),
+                Flexible(
+                  child: Text(
+                    'DEMO · dados simulados',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: t.ink,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.4,
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
