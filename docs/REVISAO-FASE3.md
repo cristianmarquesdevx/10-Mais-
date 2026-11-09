@@ -68,8 +68,9 @@ para dar tempo de alternar entre os apps.
    confirmado, a tela mostrou **Pagamento confirmado** → **Avaliar corrida**
    → 5 estrelas → **Enviar avaliação** → home.
 6. API: corrida `FINALIZADA`, `payment_status=CONFIRMED`, `fare_total`
-   igual ao `quoted_fare` congelado no pedido (11,04 naquela execução);
-   carteira do parceiro intacta (PASSE não gera comissão em dinheiro).
+   igual ao valor da cotação congelada no servidor (11,04 naquela
+   execução); carteira do parceiro intacta (PASSE não gera comissão em
+   dinheiro).
 
 Evidências em `.preview/` (capturas do emulador): `e2e_final_*`,
 `e2e_rev2_*`, `e2e_final_pass_pag_confirmado.png` e
@@ -311,11 +312,11 @@ oferta calculava Haversine × 1,35 por conta própria e o recibo não tinha
 distância — era possível o card dizer 1,2 km e a oferta, 1,6 km.
 
 O que o contrato garante, e o smoke verifica a cada execução, é a
-**coerência**: o valor mostrado no card é o que o `POST /rides` congela em
-`quoted_fare`, é o que o parceiro vê na oferta (`amount`) e é o
-`fare_total` final. O que ele não garante é um número específico — por isso
-nenhum teste asserta R$ 11,04, só que o valor é numérico e igual em toda a
-cadeia.
+**coerência**: o valor mostrado no card é o que o `GET /quote` congela no
+servidor (desde 07/11/2026, por `quote_id` de uso único), é o que o
+parceiro vê na oferta (`amount`) e é o `fare_total` final. O que ele não
+garante é um número específico — por isso nenhum teste asserta R$ 11,04,
+só que o valor é numérico e igual em toda a cadeia.
 
 Desde 23/10 o card "Valor no momento" mostra a composição
 (`Base R$ 7,64 · 1,2 km · demanda ×1,33 · hora ×1,18`), para o passageiro

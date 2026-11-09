@@ -145,7 +145,7 @@ Severidade: **C** crítico · **A** alto · **M** médio · **B** baixo.
 | A-03 | **C** | **Entregas não existem**: sem telas, sem tabela, sem upload de fotos, sem acompanhamento | 2 menções de "entrega" no código (texto); 0 em `openapi.yaml` |
 | A-04 | **A** | **Chat 24 h, painel admin e alarme de 4 min não existem** | 0 ocorrências de `admin`, `alarme`; "chat" só em rótulo |
 | A-05 | **A** | **Valores de negócio fixos em código**: passe `10.0`, comissão `0.12`, piso de negociação `15` | `demo_api.py:1784`, `:340`, `:493` — contraria "nunca fixos em código" |
-| A-06 | **A** | **Preço é escolhido pelo cliente** (`quoted_fare` vira `fare_total`), sem cotação assinada/expiração | `demo_api.py:443-448` (F-09) |
+| A-06 | **A** | ~~**Preço é escolhido pelo cliente**~~ **Fechado na demo em 07/11/2026**: o `GET /quote` emite `quote_id` e o `POST /rides` cobra o valor gravado no servidor (uso único, 90 s, vinculado à rota); o `quoted_fare` virou campo informativo. Falta persistir/assinar a cotação no backend real (Fase 2) | `scripts/demo_api.py` (`_resolve_quote`); `docs/REVISAO-FABLE.md` §5; `scripts/test_quotes.py` 9/9 |
 | A-07 | **A** | **Despacho real não existe**; oferta nasce quando o parceiro consulta, sem raio/score/leva | `demo_api.py:736-810` (F-11) |
 | A-08 | **M** | KYC tem status na UI, mas não há fila, SLA nem triagem no servidor | `status_solicitacao_screen.dart`, `perfil_screen.dart` |
 

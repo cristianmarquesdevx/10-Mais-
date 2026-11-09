@@ -15,7 +15,7 @@ Os **fluxos de tela** (pedido → oferta → aceite → fases → pagamento → 
 | A quantidade de motoristas exibida corresponde a conectados/elegíveis? | **Não existe contagem.** O que aparece é o desenho desses 3 pinos e, no app do motorista, "38 chamadas/h" por zona — números inventados. |
 | O mapa de chamadas usa locais reais? | Os **tiles** são reais (OSM), mas os **rótulos das zonas** estão errados/inventados e as coordenadas não correspondem aos bairros que nomeiam (provado por geocodificação reversa, F-06). |
 | A tarifa segue a política documentada? | **Não.** É `5,00 + 2,20 × km` com multiplicadores fixos; sem piso, sem minuto, sem espera, sem taxas, sem `city_configs`, sem simulação. |
-| O preço mostrado é o preço cobrado? | O valor **congela** no pedido, mas quem manda o valor é o **cliente** (`quoted_fare`) — não há cotação assinada nem expiração validada no servidor. |
+| O preço mostrado é o preço cobrado? | **Sim, desde 07/11/2026 na demo.** O `GET /quote` emite `quote_id` e o `POST /rides` cobra o valor gravado no servidor (uso único, 90 s, vinculado à rota). O `quoted_fare` do cliente é campo **informativo**. No backend real ainda falta persistir/assinar a cotação (Fase 2). |
 | Existe tempo real? | **Não.** Nenhum WebSocket/SSE/Supabase Realtime; os dois apps fazem poll de 5 s com backoff. |
 | Existe backend real? | Existe **especificação** (DDL + RLS + OpenAPI) e existe **demo em memória**. O código das Edge Functions não está no repositório. |
 
@@ -40,7 +40,10 @@ O próprio `demo_api.py` declara no docstring: *"API de DEMONSTRAÇÃO — não 
 
 ### 1.2 O que os apps chamam (e o que isso significa)
 
-- `POST /rides` cria a corrida e **aceita o preço enviado pelo app** (`quoted_fare`).
+- `POST /rides` cria a corrida e cobra o preço **do servidor**: desde
+  07/11/2026 a cotação congelada vem por `quote_id` (uso único, 90 s,
+  vinculada à rota); sem id, o servidor recalcula pela rota. O
+  `quoted_fare` do corpo é apenas informativo (F-09, fechado na demo).
 - `GET /offers/mine` **gera ofertas sob demanda** para qualquer corrida `BUSCANDO` — não há motorista, raio, score ou distância envolvidos.
 - `GET /partners/nearby` devolve motoristas sintéticos.
 - `GET /heatmap` devolve zonas com pesos e "chamadas/hora" semeados em código.
@@ -152,7 +155,15 @@ Teste ao vivo: corrida com tarifa congelada de **R$ 10,00** → proposta de **R$
 **Solução:** validar `0,7 × tarifa ≤ valor ≤ 3 × tarifa` no servidor, com piso de cidade configurável, rodadas/expiração e anti-colusão.
 
 ### F-09 · C — O cliente escolhe o preço
-**Evidência:** `demo_api.py:443-448` — `quoted_fare` do corpo vira `fare_total`; `docs/fase2/openapi.yaml:750-757`; `docs/REVISAO-FABLE.md` já registrava a pendência "congelar a cotação no servidor".
+> **Fechado na demo em 07/11/2026** (o backend real da Fase 2 ainda precisa
+> persistir/assinar a cotação). O `scripts/demo_api.py` hoje emite
+> `quote_id` no `GET /quote` e cobra no `POST /rides` o valor gravado no
+> servidor — uso único, validade de 90 s, vinculada à rota; o `quoted_fare`
+> do corpo é informativo e, se divergir, o pedido é recusado (422
+> `quote_fare_mismatch`). Ver `docs/REVISAO-FABLE.md` §5 e os 9 testes de
+> `scripts/test_quotes.py`.
+
+**Evidência (estado em 23/10):** `demo_api.py:443-448` — `quoted_fare` do corpo vira `fare_total`; `docs/fase2/openapi.yaml:750-757`; `docs/REVISAO-FABLE.md` já registrava a pendência "congelar a cotação no servidor".
 **Causa:** a cotação é um número sem identidade; não há `quote_id`, assinatura ou janela validada.
 **Impacto:** qualquer cliente altera o valor da corrida, do recibo e do lançamento na carteira; a "tarifa aprovada" deixa de ser garantia.
 **Solução:** `GET /quote` devolve `quote_id` + validade; `POST /rides` referencia o id e o servidor recalcula/assina (rejeita adulteração e cotação vencida). Nunca confiar em valor do cliente.

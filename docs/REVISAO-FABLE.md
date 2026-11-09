@@ -36,9 +36,15 @@ Fórmula (`scripts/demo_api.py`, `_quote`): `base = 5,00 + 2,20 × km` onde
 5h, `1,00` no resto.
 
 O que importa e foi confirmado por observação: **o valor é o mesmo em toda a
-cadeia**. `GET /quote` → `POST /rides` congela em `quoted_fare` →
+cadeia**. `GET /quote` → `POST /rides` congela o valor no servidor →
 `amount` da oferta no parceiro → `fare_total` final. No teste ao vivo:
 cotação 13,03 → oferta 13,03 → corrida `FINALIZADA` com 13,03.
+
+> **Atualizado em 07/11/2026:** o congelamento passou a ser do **servidor**.
+> O `GET /quote` emite um `quote_id` de uso único e o `POST /rides` apresenta
+> esse id — o `quoted_fare` do corpo virou campo **informativo** (se
+> divergir do valor gravado, o pedido é recusado com 422
+> `quote_fare_mismatch`). Ver §5.
 
 A rota OSRM também está correta: `router.project-osrm.org` devolveu 1.226,7 m
 / 144,6 s para as coordenadas da demo, e o app mostra "1,2 km · 3 min" — o
@@ -131,7 +137,7 @@ mapa usa a rua de verdade, não a linha reta.
 | P1 | Smoke falhar explicando estado sujo | diagnóstico, não bug fantasma | feito |
 | P1 | Rodar o `e2e-emulator` no Actions e anexar o `result.json` | é o único verde de UI confiável hoje | pendente |
 | P2 | `trip_distance_km` da oferta pelo mesmo `_road_km` da cotação | parceiro e passageiro com o mesmo km em qualquer rota | feito 23/10 |
-| P2 | Congelar a cotação no servidor por `expires_in` (hoje a demo aceita qualquer `quoted_fare`) | fecha o furo entre cotação e pedido | pendente |
+| P2 | Congelar a cotação no servidor por `quote_id` + `expires_in` (a demo aceitava qualquer `quoted_fare`) | fecha o furo entre cotação e pedido | **feito 07/11/2026** (§5) |
 
 ## 4. Como reproduzir a revisão
 
@@ -142,3 +148,64 @@ curl "http://127.0.0.1:8799/quote?origin_lat=-8.7607&origin_lon=-63.9039&dest_la
 cd app/passageiro && flutter test && dart analyze
 cd app/parceiro   && flutter test && dart analyze
 ```
+
+## 5. P2 fechado — a cotação congela no servidor (07/11/2026)
+
+O item P2 do plano (§3) era o furo real entre **preço mostrado** e **preço
+cobrado**: o `POST /rides` aceitava o `quoted_fare` do corpo e virava
+`fare_total`. Qualquer cliente podia escrever o preço da corrida, do recibo
+e do lançamento na carteira.
+
+**O que mudou**
+
+| Antes (23/10) | Agora (07/11) |
+|---|---|
+| `GET /quote` devolve só `fare_total` + `expires_in` | devolve **`quote_id`** + `fare_total` + `expires_in` |
+| `POST /rides` aceita `quoted_fare` do cliente | **`quoted_fare` é informativo**; quem manda é o valor gravado no servidor |
+| cotação vencida ainda era cobrada | cotação vencida → 422 `quote_expired` |
+| cotação de outra rota era aceita | rota diferente → 422 `quote_mismatch` (tolerância de ~50 m no GPS) |
+| cotação podia ser reenviada | uso **único**: reenvio → 422 `quote_not_found` |
+| app mandava só o número | app manda `quote_id` + `quoted_fare` (que só confere) |
+
+**Regras** (`scripts/demo_api.py`)
+
+- `QUOTE_TTL_S = 90` — mesmo `expires_in` que o card promete.
+- `STATE["quotes"]` guarda `fare_total`, `expires_at`, origem e destino de
+  cada cotação emitida.
+- `_resolve_quote()`: com `quote_id` válido, devolve o valor gravado; **sem
+  id, o servidor recalcula pela rota** e ignora o `quoted_fare` do corpo
+  (nunca cobra preço de cliente).
+- Se o `quoted_fare` enviado divergir do valor congelado → 422
+  `quote_fare_mismatch` (tolerância de meio centavo).
+- Cotações vencidas são expurgadas do estado 5 min depois do prazo (a
+  resposta `quote_expired` continua correta nesse intervalo).
+
+**Contrato** (`docs/fase2/openapi.yaml`): `Quote.quote_id` e
+`RideRequest.quote_id` (uuid), com `quoted_fare` documentado como
+"informative only". A corrida devolve `Ride.quote_id` — a **auditoria** de
+qual cotação foi honrada (null quando o servidor recalculou sem cotação).
+
+**App do passageiro**: `Quote.quoteId` → `createRide(quoteId)` →
+`requestRide(quoteId)` → `destino_screen.dart` envia o id da cotação que
+está na tela (re-cotando antes, se ela tiver vencido).
+
+**Verificação**
+
+- `python -m unittest discover -s scripts -p "test_*.py"` → **23/23** OK
+  (12 de despacho + **11 de cotação** em `scripts/test_quotes.py`).
+- Smokes contra API limpa: `smoke_demo_api`, `smoke_dispatch`,
+  `smoke_dispatch_app`, `smoke_ride_pix` → **PASS** (os três primeiros
+  passaram a emitir `quote_id` antes do pedido).
+- Flutter passageiro: **63/63** (teste novo em `api_client_test.dart`
+  conferindo `quote_id` no corpo) + `dart analyze lib test` limpo.
+- E2E no emulador: corrida `133ac60e`, R$ 7,50, FINALIZADA/CONFIRMED/
+  avaliada — artefatos em `.preview/e2e_auto/20261107-150427-a1`.
+- **E2E com a cadeia da cotação** (20261107-162241-a1): o harness lê o
+  preço **na tela** (R$ 7,50), confere no fim que o `fare_total` é o mesmo
+  e exige o `quote_id` na corrida — corrida `8c248d4f`, cotação `f016a99a`,
+  R$ 7,50 dos dois lados.
+
+**O que continua fora do escopo da demo**: a cotação vive em memória
+(`STATE["quotes"]`), sem assinatura criptográfica e sem persistência. No
+backend real, `quote_id` vira registro no Postgres (Fase 2) com o mesmo
+contrato: o cliente apresenta o id, o servidor decide o preço.
