@@ -3,11 +3,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:ten_map/ten_map.dart';
 
 import '../../main.dart';
 import '../api/client.dart';
 import '../location/location_service.dart';
-import '../map/route_map_view.dart';
 import '../theme/theme.dart';
 
 /// Navegação do parceiro: mapa em tela cheia com a rota por ruas e as

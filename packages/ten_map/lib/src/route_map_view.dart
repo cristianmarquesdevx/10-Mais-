@@ -7,7 +7,8 @@ import 'package:latlong2/latlong.dart';
 // brigar com o `latlong2` (que é o tipo do traçado) nem com o `flutter_map`.
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 
-import '../theme/theme.dart';
+import 'package:ten_design/ten_design.dart';
+
 import 'map_capabilities.dart';
 import 'map_layers.dart';
 import 'map_styles.dart';
@@ -36,6 +37,7 @@ class RouteMapView extends StatelessWidget {
     this.driver,
     this.padding = 28,
     this.showAttribution = true,
+    this.userAgentPackageName = 'app.dezemais',
   });
 
   /// Traçado por ruas (OSRM). Vazio = ainda não carregou (ou falhou).
@@ -55,6 +57,11 @@ class RouteMapView extends StatelessWidget {
 
   /// O crédito do OpenStreetMap aparece no canto (política do OSM).
   final bool showAttribution;
+
+  /// Identificador enviado ao OSM no fallback raster. Cada app passa o seu
+  /// (`app.dezemais.passageiro` / `app.dezemais.parceiro`) — a política de
+  /// tiles exige um user-agent identificável.
+  final String userAgentPackageName;
 
   @override
   Widget build(BuildContext context) {
@@ -77,6 +84,7 @@ class RouteMapView extends StatelessWidget {
       driver: driver,
       padding: padding,
       showAttribution: showAttribution,
+      userAgentPackageName: userAgentPackageName,
     );
   }
 }
@@ -285,6 +293,7 @@ class _RasterRouteMap extends StatelessWidget {
     required this.driver,
     required this.padding,
     required this.showAttribution,
+    required this.userAgentPackageName,
   });
 
   final List<LatLng> points;
@@ -293,6 +302,7 @@ class _RasterRouteMap extends StatelessWidget {
   final LatLng? driver;
   final double padding;
   final bool showAttribution;
+  final String userAgentPackageName;
 
   @override
   Widget build(BuildContext context) {
@@ -321,7 +331,7 @@ class _RasterRouteMap extends StatelessWidget {
             // OSM padrão (ruas e nomes reais) sem chave de API.
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'app.dezemais.parceiro',
+              userAgentPackageName: userAgentPackageName,
             ),
             if (hasRoute)
               PolylineLayer(polylines: [

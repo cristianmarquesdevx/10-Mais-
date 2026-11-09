@@ -660,6 +660,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  ten_map:
+    dependency: "direct main"
+    description:
+      path: "../../packages/ten_map"
+      relative: true
+    source: path
+    version: "0.1.0"
   term_glyph:
     dependency: transitive
     description:

@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:ten_map/ten_map.dart';
 
 import '../api/client.dart';
 import '../widgets/heatmap_map.dart';
-import 'map_capabilities.dart';
-import 'map_layers.dart';
-import 'map_provider.dart';
-import 'map_styles.dart';
 
 /// Mapa do motorista — **ponto de troca único** do backend de mapa.
 ///
@@ -133,7 +130,8 @@ class _VectorPartnerMapState extends State<_VectorPartnerMap> {
     }
   }
 
-  String _styleJson() => MapStyles.consoleNoturnoStyleJson(dark: widget.dark);
+  String _styleJson() =>
+      MapStyles.consoleNoturnoStyleJson(dark: widget.dark, radar: true);
 
   Future<void> _onStyleLoaded() async {
     _styleReady = true;
@@ -147,7 +145,16 @@ class _VectorPartnerMapState extends State<_VectorPartnerMap> {
     try {
       await c.setGeoJsonSource(
         MapLayers.demandSourceId,
-        MapLayers.demandGeoJson(widget.zones),
+        MapLayers.demandGeoJson([
+          for (final z in widget.zones)
+            MapHeatZone(
+              lat: z.lat,
+              lon: z.lon,
+              weight: z.weight,
+              callsLastHour: z.callsLastHour,
+              label: z.label,
+            ),
+        ]),
       );
     } catch (_) {
       // Estilo recarregando: o `onStyleLoaded` reenvia o dado.

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:ten_map/ten_map.dart';
 
 import '../api/client.dart';
-import '../map/map_layers.dart';
 import '../theme/theme.dart';
 
 /// Mapa **raster** do parceiro — tiles de imagem do OpenStreetMap.

@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:passageiro/src/map/map_layers.dart';
-import 'package:passageiro/src/map/map_styles.dart';
+import 'package:ten_map/ten_map.dart';
 
 void main() {
   group('Mapa do passageiro', () {

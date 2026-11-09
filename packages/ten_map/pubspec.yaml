@@ -1,0 +1,23 @@
+name: ten_map
+description: "Mapa compartilhado do 10 é + — Console Noturno (MapLibre) com fallback raster, usado pelo passageiro e pelo parceiro."
+publish_to: "none"
+version: 0.1.0
+
+# "ten" é o 10 da marca; o nome do pacote precisa começar com letra.
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
+  maplibre_gl: ^0.28.0
+  # Tokens da marca usados pelo fallback raster (pinos e traçado).
+  ten_design:
+    path: ../ten_design
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0

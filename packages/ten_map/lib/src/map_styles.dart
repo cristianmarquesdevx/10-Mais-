@@ -6,15 +6,18 @@ import 'map_layers.dart';
 
 /// Estilo vetorial do mapa — direção visual "Console Noturno".
 ///
-/// Esta é a base compartilhada pela marca: o app do motorista acrescenta as
-/// camadas Radar (demanda); o do passageiro usa o mesmo estilo **sem** calor.
+/// Esta é a base compartilhada pela marca: o app do motorista pede
+/// `radar: true` e ganha as camadas Radar (demanda + marcador); o do
+/// passageiro usa o mesmo estilo **sem** calor. A rota é comum aos dois.
 ///
 /// O estilo é **gerado em Dart**, não um arquivo de asset, por três motivos:
 /// 1. o mesmo código serve o tema claro e o escuro (uma paleta, dois
 ///    conjuntos de cores) — o mapa acompanha o app;
 /// 2. dá para testar (a suíte verifica cores, camadas e fontes);
-/// 3. a base do mapa fica no próprio estilo; o app do motorista acrescenta
-///    as camadas Radar em cima desta mesma paleta.
+/// 3. as camadas de dado (rota e, no motorista, Radar) entram **no próprio
+///    estilo**, com fontes GeoJSON vazias: em runtime o app só troca o dado
+///    da fonte (`setGeoJsonSource`). Um estilo estático não conseguiria
+///    carregar dado que muda a cada 25 s.
 ///
 /// Fontes (OpenMapTiles via OpenFreeMap):
 /// - tiles: `https://tiles.openfreemap.org/planet` (TileJSON, maxzoom 14);
@@ -82,11 +85,20 @@ abstract final class MapStyles {
   );
 
   /// Style JSON (dark = true) pronto para o MapLibre.
-  static String consoleNoturnoStyleJson({required bool dark}) =>
-      jsonEncode(consoleNoturnoStyle(dark: dark));
+  ///
+  /// [radar] liga as camadas de demanda e do marcador do motorista; a base e
+  /// a rota existem sempre.
+  static String consoleNoturnoStyleJson({
+    required bool dark,
+    bool radar = false,
+  }) =>
+      jsonEncode(consoleNoturnoStyle(dark: dark, radar: radar));
 
   /// Style JSON do Console Noturno como mapa — a forma testável.
-  static Map<String, dynamic> consoleNoturnoStyle({required bool dark}) {
+  static Map<String, dynamic> consoleNoturnoStyle({
+    required bool dark,
+    bool radar = false,
+  }) {
     final p = dark ? _dark : _light;
     return {
       'version': 8,
@@ -97,7 +109,19 @@ abstract final class MapStyles {
           'type': 'vector',
           'url': tilesUrl,
         },
-        // Fonte da rota: o traçado e os pontos entram em runtime.
+        // Fontes Radar: vazias no estilo, alimentadas em runtime.
+        if (radar) ...{
+          MapLayers.demandSourceId: {
+            'type': 'geojson',
+            'data': MapLayers.emptyGeoJson(),
+          },
+          MapLayers.driverSourceId: {
+            'type': 'geojson',
+            'data': MapLayers.emptyGeoJson(),
+          },
+        },
+        // Fonte da rota (telas de oferta e navegação): o traçado e os
+        // pontos entram em runtime, como as fontes Radar.
         MapLayers.routeSourceId: {
           'type': 'geojson',
           'data': MapLayers.emptyGeoJson(),
@@ -116,7 +140,12 @@ abstract final class MapStyles {
         _roadMinor(p),
         _roadMajor(p),
         _roadTrunk(p),
-        // --- rota: traçado + pontos (acima das vias, abaixo dos rótulos) ---
+        // --- Radar: calor (fica **abaixo** dos rótulos do mapa) ---
+        if (radar) ...[
+          _demandHeat(p),
+          _demandOutline(p),
+        ],
+        // --- Rota: traçado + pontos (acima do calor, abaixo dos rótulos) ---
         _routeCasing(p),
         _routeLine(p),
         _routeMarkerRing(p),
@@ -125,6 +154,14 @@ abstract final class MapStyles {
         _roadLabels(p),
         _waterLabels(p),
         _placeLabels(p),
+        // --- Radar: rótulo da demanda (prioridade máxima) ---
+        if (radar) _demandLabel(p),
+        // --- Radar: marcador do motorista (por cima de tudo) ---
+        if (radar) ...[
+          _driverHalo(p),
+          _driverDot(p),
+          _driverArrow(p),
+        ],
       ],
     };
   }
@@ -448,7 +485,152 @@ abstract final class MapStyles {
       };
 
   // -------------------------------------------------------------------------
-  // Rota (traçado + origem/destino/motorista)
+  // Radar — demanda
+  // -------------------------------------------------------------------------
+
+  /// Raio do halo de calor, em pixels, por zoom.
+  ///
+  /// O `interpolate` de zoom tem que ser a expressão **do topo** da
+  /// propriedade: o MapLibre recusa `["*", ["interpolate", ...zoom...], ...]`
+  /// ("zoom expression may only be used as input to a top-level step or
+  /// interpolate expression") e a camada inteira deixa de ser desenhada.
+  /// Por isso o fator de peso (0,45..1) entra **dentro** das paradas.
+  static List<dynamic> _heatRadius() => [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        9,
+        ['*', 16, _weightFactor()],
+        14,
+        ['*', 38, _weightFactor()],
+        18,
+        ['*', 92, _weightFactor()],
+      ];
+
+  /// Quanto maior o peso da zona, maior o halo (0,45..1).
+  static List<dynamic> _weightFactor() => [
+        '+',
+        0.45,
+        [
+          '*',
+          0.55,
+          ['get', 'weight']
+        ],
+      ];
+
+  static Map<String, dynamic> _demandHeat(_MapPalette p) => {
+        'id': 'demand-heat',
+        'type': 'circle',
+        'source': MapLayers.demandSourceId,
+        'paint': {
+          'circle-radius': _heatRadius(),
+          'circle-color': [
+            'interpolate',
+            ['linear'],
+            ['get', 'weight'],
+            0,
+            MapLayers.heatColorHex(0),
+            0.5,
+            MapLayers.heatColorHex(0.5),
+            1,
+            MapLayers.heatColorHex(1),
+          ],
+          'circle-opacity': [
+            'interpolate',
+            ['linear'],
+            ['get', 'weight'],
+            0,
+            0.22,
+            1,
+            0.62,
+          ],
+          'circle-blur': 0.38,
+        },
+      };
+
+  static Map<String, dynamic> _demandOutline(_MapPalette p) => {
+        'id': 'demand-outline',
+        'type': 'circle',
+        'source': MapLayers.demandSourceId,
+        'paint': {
+          'circle-radius': _heatRadius(),
+          'circle-opacity': 0,
+          'circle-stroke-color': [
+            'interpolate',
+            ['linear'],
+            ['get', 'weight'],
+            0,
+            MapLayers.heatColorHex(0),
+            0.5,
+            MapLayers.heatColorHex(0.5),
+            1,
+            MapLayers.heatColorHex(1),
+          ],
+          'circle-stroke-width': 1.5,
+          'circle-stroke-opacity': 0.75,
+        },
+      };
+
+  static Map<String, dynamic> _demandLabel(_MapPalette p) => {
+        'id': 'demand-label',
+        'type': 'symbol',
+        'source': MapLayers.demandSourceId,
+        'minzoom': 12,
+        // Só zonas com sinal relevante entram no rótulo (o resto vira ruído).
+        'filter': [
+          '>=',
+          ['get', 'weight'],
+          0.25
+        ],
+        'layout': {
+          'text-field': [
+            'case',
+            [
+              '==',
+              [
+                'coalesce',
+                ['get', 'label'],
+                ''
+              ],
+              ''
+            ],
+            [
+              'to-string',
+              ['get', 'calls']
+            ],
+            [
+              'concat',
+              [
+                'coalesce',
+                ['get', 'label'],
+                ''
+              ],
+              ' · ',
+              [
+                'to-string',
+                ['get', 'calls']
+              ],
+            ],
+          ],
+          'text-font': [fontStack],
+          'text-size': 11,
+          'text-anchor': 'center',
+          'text-offset': [0, 0],
+          // O MapLibre resolve a colisão: rótulos sobrepostos saem de cena
+          // em vez de virar um borrão ilegível.
+          'text-allow-overlap': false,
+          'text-ignore-placement': false,
+        },
+        'paint': {
+          'text-color': _hex(p.heatLabel),
+          'text-halo-color': _hex(p.heatLabelHalo),
+          'text-halo-width': 1.4,
+          'text-halo-blur': 0.3,
+        },
+      };
+
+  // -------------------------------------------------------------------------
+  // Rota (traçado + origem/destino/parceiro)
   // -------------------------------------------------------------------------
 
   /// Contorno do traçado: linha escura e grossa sob a linha da marca, para
@@ -485,7 +667,7 @@ abstract final class MapStyles {
         },
       };
 
-  /// Anel dos pontos (origem/destino/motorista).
+  /// Anel dos pontos (origem/destino/parceiro).
   static Map<String, dynamic> _routeMarkerRing(_MapPalette p) => {
         'id': 'route-marker-ring',
         'type': 'circle',
@@ -514,7 +696,7 @@ abstract final class MapStyles {
         },
       };
 
-  /// Miolo dos pontos: destino preenchido de teal; origem e motorista
+  /// Miolo dos pontos: destino preenchido de teal; origem e parceiro
   /// brancos com o anel da marca.
   static Map<String, dynamic> _routeMarkerCore(_MapPalette p) => {
         'id': 'route-marker-core',
@@ -534,6 +716,59 @@ abstract final class MapStyles {
             _hex(p.routeLine),
             _hex(p.driverRing),
           ],
+        },
+      };
+
+  // -------------------------------------------------------------------------
+  // Radar — marcador do motorista
+  // -------------------------------------------------------------------------
+
+  static Map<String, dynamic> _driverHalo(_MapPalette p) => {
+        'id': 'driver-halo',
+        'type': 'circle',
+        'source': MapLayers.driverSourceId,
+        'filter': [
+          '==',
+          ['get', 'kind'],
+          'halo'
+        ],
+        'paint': {
+          'circle-radius': 14,
+          'circle-color': ['get', 'color'],
+          'circle-opacity': 0.2,
+          'circle-blur': 0.3,
+        },
+      };
+
+  static Map<String, dynamic> _driverDot(_MapPalette p) => {
+        'id': 'driver-dot',
+        'type': 'circle',
+        'source': MapLayers.driverSourceId,
+        'filter': [
+          '==',
+          ['get', 'kind'],
+          'dot'
+        ],
+        'paint': {
+          'circle-radius': 4.5,
+          'circle-color': ['get', 'color'],
+          'circle-stroke-color': _hex(p.driverRing),
+          'circle-stroke-width': 2,
+        },
+      };
+
+  static Map<String, dynamic> _driverArrow(_MapPalette p) => {
+        'id': 'driver-arrow',
+        'type': 'fill',
+        'source': MapLayers.driverSourceId,
+        'filter': [
+          '==',
+          ['get', 'kind'],
+          'arrow'
+        ],
+        'paint': {
+          'fill-color': ['get', 'color'],
+          'fill-outline-color': _hex(p.driverRing),
         },
       };
 

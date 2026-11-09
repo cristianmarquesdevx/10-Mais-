@@ -3,7 +3,33 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../api/client.dart';
+/// Uma zona de demanda no mapa (calor).
+///
+/// Modelo **do pacote**, independente do contrato de API de cada app: o
+/// parceiro converte o `HeatZone` do `GET /heatmap` para cá. Assim o mapa
+/// compartilhado não depende do cliente HTTP de nenhum app.
+@immutable
+class MapHeatZone {
+  const MapHeatZone({
+    required this.lat,
+    required this.lon,
+    required this.weight,
+    required this.callsLastHour,
+    this.label,
+  });
+
+  final double lat;
+  final double lon;
+
+  /// 0..1 (o GeoJSON satura fora da faixa).
+  final double weight;
+
+  /// Chamadas na última hora — o número que o motorista usa para decidir.
+  final int callsLastHour;
+
+  /// Nome do bairro/ponto, quando o servidor manda.
+  final String? label;
+}
 
 /// Camadas "Radar" do mapa: a **demanda** (calor) e o **marcador** do
 /// motorista.
@@ -84,7 +110,7 @@ abstract final class MapLayers {
   /// `calls_last_hour` viaja como propriedade para o rótulo da camada — é o
   /// número que o motorista usa para decidir. `label` pode ser nulo: o
   /// rótulo mostra só as chamadas.
-  static Map<String, dynamic> demandGeoJson(List<HeatZone> zones) => {
+  static Map<String, dynamic> demandGeoJson(List<MapHeatZone> zones) => {
         'type': 'FeatureCollection',
         'features': [
           for (final z in zones)

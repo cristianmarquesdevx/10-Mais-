@@ -5,13 +5,9 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:parceiro/src/api/client.dart';
-import 'package:parceiro/src/map/map_capabilities.dart';
-import 'package:parceiro/src/map/map_layers.dart';
-import 'package:parceiro/src/map/map_provider.dart';
-import 'package:parceiro/src/map/map_styles.dart';
 import 'package:parceiro/src/map/partner_map.dart';
-import 'package:parceiro/src/map/route_map_view.dart';
 import 'package:parceiro/src/widgets/heatmap_map.dart';
+import 'package:ten_map/ten_map.dart';
 
 HeatZone _zone({
   double lat = -8.76,
@@ -21,6 +17,21 @@ HeatZone _zone({
   int calls = 38,
 }) =>
     HeatZone(
+      lat: lat,
+      lon: lon,
+      weight: weight,
+      label: label,
+      callsLastHour: calls,
+    );
+
+MapHeatZone _mapZone({
+  double lat = -8.76,
+  double lon = -63.90,
+  double weight = 0.5,
+  String? label = 'Centro',
+  int calls = 38,
+}) =>
+    MapHeatZone(
       lat: lat,
       lon: lon,
       weight: weight,
@@ -71,7 +82,7 @@ bool _zoomRuleOk(dynamic node, {required bool topLevel}) {
 void main() {
   group('Style JSON (Console Noturno)', () {
     test('tem versão 8, glifos e as três fontes', () {
-      final style = MapStyles.consoleNoturnoStyle(dark: true);
+      final style = MapStyles.consoleNoturnoStyle(dark: true, radar: true);
 
       expect(style['version'], 8);
       // Sem `glyphs` os rótulos (symbol layers) não aparecem.
@@ -107,7 +118,7 @@ void main() {
     });
 
     test('tem as camadas base e as camadas Radar, na ordem certa', () {
-      final style = MapStyles.consoleNoturnoStyle(dark: true);
+      final style = MapStyles.consoleNoturnoStyle(dark: true, radar: true);
       final ids = (style['layers'] as List)
           .map((l) => (l as Map)['id'] as String)
           .toList();
@@ -158,7 +169,7 @@ void main() {
     });
 
     test('a paleta do calor é a da marca (teal → âmbar → coral)', () {
-      final style = MapStyles.consoleNoturnoStyle(dark: true);
+      final style = MapStyles.consoleNoturnoStyle(dark: true, radar: true);
       final heat = _layerById(style, 'demand-heat');
       final color = heat['paint']['circle-color'] as List;
 
@@ -187,7 +198,7 @@ void main() {
     });
 
     test('o rótulo da zona mostra o nome e as chamadas', () {
-      final style = MapStyles.consoleNoturnoStyle(dark: true);
+      final style = MapStyles.consoleNoturnoStyle(dark: true, radar: true);
       final label = _layerById(style, 'demand-label');
       final field = jsonEncode(label['layout']['text-field']);
 
@@ -203,19 +214,22 @@ void main() {
       // "zoom expression may only be used as input to a top-level step or
       // interpolate expression" no logcat.
       for (final dark in [true, false]) {
-        final style = MapStyles.consoleNoturnoStyle(dark: dark);
-        for (final layer in style['layers'] as List) {
-          final l = layer as Map;
-          final id = l['id'];
-          for (final bloco in ['paint', 'layout']) {
-            final props = l[bloco];
-            if (props is! Map) continue;
-            for (final entry in props.entries) {
-              expect(
-                _zoomRuleOk(entry.value, topLevel: true),
-                isTrue,
-                reason: 'expressão inválida em "$id.$bloco.${entry.key}"',
-              );
+        for (final radar in [true, false]) {
+          final style =
+              MapStyles.consoleNoturnoStyle(dark: dark, radar: radar);
+          for (final layer in style['layers'] as List) {
+            final l = layer as Map;
+            final id = l['id'];
+            for (final bloco in ['paint', 'layout']) {
+              final props = l[bloco];
+              if (props is! Map) continue;
+              for (final entry in props.entries) {
+                expect(
+                  _zoomRuleOk(entry.value, topLevel: true),
+                  isTrue,
+                  reason: 'expressão inválida em "$id.$bloco.${entry.key}"',
+                );
+              }
             }
           }
         }
@@ -226,7 +240,7 @@ void main() {
   group('GeoJSON da demanda', () {
     test('mapeia zona → feature com peso, rótulo e chamadas', () {
       final gj = MapLayers.demandGeoJson([
-        _zone(lat: -8.76, lon: -63.90, weight: 0.8, calls: 38),
+        _mapZone(lat: -8.76, lon: -63.90, weight: 0.8, calls: 38),
       ]);
 
       expect(gj['type'], 'FeatureCollection');
@@ -247,7 +261,7 @@ void main() {
 
     test('peso fora de 0..1 é limitado e rótulo nulo vira string vazia', () {
       final gj = MapLayers.demandGeoJson([
-        _zone(weight: 3.2, label: null),
+        _mapZone(weight: 3.2, label: null),
       ]);
       final props =
           ((gj['features'] as List).first as Map)['properties'] as Map;

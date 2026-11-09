@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:ten_map/ten_map.dart';
 
 import '../api/route_service.dart';
-import '../map/route_map_view.dart';
 import '../theme/theme.dart';
 
 /// Mapa real (OpenStreetMap) com a rota de carro traçada entre [origin] e
@@ -113,6 +113,7 @@ class _RouteMapState extends State<RouteMap> {
               origin: widget.origin,
               destination: dest,
               driver: widget.driver,
+              userAgentPackageName: 'app.dezemais.parceiro',
             ),
             Positioned(
               left: AppSpace.m,
