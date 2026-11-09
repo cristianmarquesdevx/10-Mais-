@@ -1,8 +1,8 @@
 name: flutter-quality
 
-# Gate barato e rápido (sem emulador): análise estática + testes dos dois apps e
-# do design system compartilhado. É o primeiro verde a consultar num PR — o E2E
-# de emulador (`e2e-emulator`) continua sob demanda por ser pesado.
+# Gate barato e rápido (sem emulador): análise estática + testes dos dois apps,
+# do design system e do mapa compartilhado. É o primeiro verde a consultar num PR
+# — o E2E de emulador (`e2e-emulator`) continua sob demanda por ser pesado.
 #
 # `dart analyze` (não `flutter analyze`): o servidor LSP desta máquina quebra com
 # o acento no caminho do projeto; no runner Linux os dois funcionam, mas o comando
@@ -48,6 +48,16 @@ jobs:
             echo "::error::O teal da marca (#05998C) foi alterado em colors.dart."
             exit 1
           fi
+
+      # Mapa compartilhado: base Console Noturno + fallback raster. O pacote
+      # prova sozinho que o Radar só entra com `radar: true` e que a rota
+      # continua nos dois apps.
+      - name: Mapa compartilhado — análise e testes
+        working-directory: packages/ten_map
+        run: |
+          flutter pub get
+          dart analyze
+          flutter test
 
       - name: Apps — análise e testes
         run: |
