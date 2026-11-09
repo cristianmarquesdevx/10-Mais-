@@ -1,0 +1,62 @@
+[
+  {
+    "arquivo": "png/01_seja_parceiro.png",
+    "titulo": "Seja parceiro 10 é Mais",
+    "descricao_acessibilidade": "Seja parceiro 10 é Mais. Dirija quando quiser e ganhe no seu ritmo."
+  },
+  {
+    "arquivo": "png/02_passe_ou_comissao.png",
+    "titulo": "Passe ou comissão",
+    "descricao_acessibilidade": "Passe ou comissão. Escolha o modelo que combina com o seu dia."
+  },
+  {
+    "arquivo": "png/03_passe_100_por_cento.png",
+    "titulo": "Com o passe, 100% é seu",
+    "descricao_acessibilidade": "Com o passe, 100% é seu. Rode pelo tempo contratado e fique com tudo o que ganhar."
+  },
+  {
+    "arquivo": "png/04_saldo_em_tempo_real.png",
+    "titulo": "Seu saldo em tempo real",
+    "descricao_acessibilidade": "Seu saldo em tempo real. Veja cada corrida somar na sua carteira, ao vivo na tela."
+  },
+  {
+    "arquivo": "png/05_saque_por_pix.png",
+    "titulo": "Saque por PIX direto no app",
+    "descricao_acessibilidade": "Saque por PIX direto no app. Peça o saque pela carteira e receba pelo PIX."
+  },
+  {
+    "arquivo": "png/06_mapa_de_calor.png",
+    "titulo": "Saiba onde tem mais chamadas",
+    "descricao_acessibilidade": "Saiba onde tem mais chamadas. O mapa de calor mostra os bairros com mais demanda agora."
+  },
+  {
+    "arquivo": "png/07_corridas_e_entregas.png",
+    "titulo": "Corridas e entregas",
+    "descricao_acessibilidade": "Corridas e entregas. Receba chamadas de passageiros e de entregas no mesmo app."
+  },
+  {
+    "arquivo": "png/08_foto_do_produto.png",
+    "titulo": "Veja o produto antes de aceitar",
+    "descricao_acessibilidade": "Veja o produto antes de aceitar. O cliente envia a foto do produto antes de chamar o entregador."
+  },
+  {
+    "arquivo": "png/09_alarme_de_chegada.png",
+    "titulo": "Passageiro avisado",
+    "descricao_acessibilidade": "Passageiro avisado. Um alarme avisa o passageiro 4 minutos antes de você chegar."
+  },
+  {
+    "arquivo": "png/10_documentos.png",
+    "titulo": "Cadastro e documentos ágeis",
+    "descricao_acessibilidade": "Cadastro e documentos ágeis. Envie seus documentos e acompanhe a análise direto pelo app."
+  },
+  {
+    "arquivo": "png/11_suporte_24h.png",
+    "titulo": "Suporte 24 horas",
+    "descricao_acessibilidade": "Suporte 24 horas. Chat de atendimento sempre aberto quando você precisar."
+  },
+  {
+    "arquivo": "png/12_comece_agora.png",
+    "titulo": "Pronto para começar?",
+    "descricao_acessibilidade": "Pronto para começar?. Fique online e receba sua primeira chamada."
+  }
+]

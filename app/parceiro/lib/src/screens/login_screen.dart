@@ -28,6 +28,10 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _busy = false;
   String? _error;
 
+  /// Mantém o cartão (e a conexão do teclado) vivo quando o layout troca
+  /// entre "herói + cartão" e "cartão rolável" ao abrir o teclado.
+  final _cardKey = GlobalKey(debugLabel: 'auth-card');
+
   @override
   void dispose() {
     _phone.dispose();
@@ -111,6 +115,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       .clamp(180.0, 320.0)
                       .toDouble();
                   final card = _AuthCard(
+                    key: _cardKey,
                     step: _step,
                     phone: _phone,
                     otp: _otp,
@@ -200,6 +205,7 @@ class _LoginScreenState extends State<LoginScreen> {
 /// Card com o formulário da etapa atual.
 class _AuthCard extends StatelessWidget {
   const _AuthCard({
+    super.key,
     required this.step,
     required this.phone,
     required this.otp,

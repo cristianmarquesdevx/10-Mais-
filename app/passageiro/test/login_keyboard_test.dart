@@ -20,7 +20,8 @@ void main() {
     await tester.pump(); // foco pedido no post-frame
   }
 
-  testWidgets('e-mail tem identidade própria e teclado de letras', (tester) async {
+  testWidgets('e-mail tem identidade própria e teclado de letras',
+      (tester) async {
     await goToEmail(tester);
 
     final field = tester.widget<TextField>(
@@ -53,7 +54,8 @@ void main() {
     expect(find.text('Código de verificação'), findsNothing);
   });
 
-  testWidgets('e-mail válido avança e leva o foco para o código', (tester) async {
+  testWidgets('e-mail válido avança e leva o foco para o código',
+      (tester) async {
     await goToEmail(tester);
 
     await tester.enterText(
@@ -69,5 +71,30 @@ void main() {
     );
     expect(otp.keyboardType, TextInputType.number);
     expect(otp.focusNode?.hasFocus, isTrue);
+  });
+
+  testWidgets('foco numérico sobrevive quando o teclado abre', (tester) async {
+    await tester.pumpWidget(MaterialApp(home: LoginScreen(onDone: () {})));
+
+    final phone = find.byKey(const ValueKey('login-phone'));
+    await tester.tap(phone);
+    await tester.pump();
+
+    final node = tester.widget<TextField>(phone).focusNode!;
+    expect(node.hasFocus, isTrue, reason: 'o campo deve começar focado');
+    expect(tester.testTextInput.isVisible, isTrue,
+        reason: 'a conexão do teclado deve estar aberta');
+
+    // Simula o teclado numérico subindo: o layout troca o herói pelo
+    // formulário rolável. O foco não pode ser perdido nessa troca.
+    tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(node.hasFocus, isTrue,
+        reason: 'o teclado deve continuar aberto para digitar');
+    expect(tester.testTextInput.isVisible, isTrue,
+        reason: 'a conexão do teclado não pode cair na troca de layout');
   });
 }

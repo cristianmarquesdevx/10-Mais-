@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 
 import '../../assets/app_assets.dart';
@@ -15,7 +16,8 @@ import 'package:ten_design/ten_design.dart';
 /// Comportamento (M4):
 /// - autoplay de 4 s com loop (volta ao primeiro no último);
 /// - pausa enquanto o usuário está tocando e enquanto há campo focado;
-/// - pausa quando `MediaQuery.disableAnimations` está ligado (acessibilidade);
+/// - com `MediaQuery.disableAnimations` o avanço **continua** (o carrossel é
+///   sempre automático); só a transição vira um salto instantâneo;
 /// - `precacheImage` em todas as artes para não piscar na troca;
 /// - `Semantics` com rótulo por arte.
 ///
@@ -44,6 +46,18 @@ class _CarouselDestaquesState extends State<CarouselDestaques>
     '03_aviso_de_chegada': 'Aviso de chegada antes da coleta',
     '04_pague_do_seu_jeito': 'Pague do seu jeito',
     '05_ganhos_do_motorista': 'Mais ganhos para o motorista',
+    '01_seja_parceiro': 'Seja parceiro 10 é Mais',
+    '02_passe_ou_comissao': 'Passe ou comissão',
+    '03_passe_100_por_cento': 'Com o passe, 100% é seu',
+    '04_saldo_em_tempo_real': 'Seu saldo em tempo real',
+    '05_saque_por_pix': 'Saque por PIX direto no app',
+    '06_mapa_de_calor': 'Saiba onde tem mais chamadas',
+    '07_corridas_e_entregas': 'Corridas e entregas',
+    '08_foto_do_produto': 'Veja o produto antes de aceitar',
+    '09_alarme_de_chegada': 'Passageiro avisado',
+    '10_documentos': 'Cadastro e documentos ágeis',
+    '11_suporte_24h': 'Suporte 24 horas',
+    '12_comece_agora': 'Pronto para começar?',
     '01_raspe_e_ganhe': 'Raspe e ganhe',
     '02_libere_raspadinhas': 'Libere novas raspadinhas',
     '03_raspe_com_o_dedo': 'Raspe com o dedo na tela',
@@ -61,6 +75,10 @@ class _CarouselDestaquesState extends State<CarouselDestaques>
   bool _touched = false;
   bool _fieldFocused = false;
 
+  /// Escopo de foco da tela. Serve para saber qual nó está focado sem
+  /// depender da árvore global de widgets (ver [_hasFocusedField]).
+  FocusScopeNode? _scope;
+
   @override
   void initState() {
     super.initState();
@@ -72,12 +90,11 @@ class _CarouselDestaquesState extends State<CarouselDestaques>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _reduceMotion = MediaQuery.disableAnimationsOf(context);
-    // Estado inicial do foco: no primeiro build o campo ainda não existe, mas
-    // o carrossel pode nascer com o teclado aberto (autofocus no login).
-    final focus = FocusManager.instance.primaryFocus;
-    _fieldFocused = focus != null &&
-        focus.context != null &&
-        focus.context!.findAncestorWidgetOfExactType<TextField>() != null;
+    // O escopo de foco da tela: é daqui que sai o nó focado.
+    _scope = FocusScope.of(context);
+    // Estado inicial do foco: o carrossel pode nascer com o teclado aberto
+    // (autofocus no login).
+    _fieldFocused = _hasFocusedField();
     _precache();
     _syncAutoplay();
   }
@@ -111,31 +128,56 @@ class _CarouselDestaquesState extends State<CarouselDestaques>
         .toList(growable: false);
   }
 
-  static final _defaultItems = AppAssets.carrosselLoginSlides
+  static final _defaultItems = AppAssets.carrosselMotoristaSlides
       .map((imagem) => <String, dynamic>{'imagem': imagem})
       .toList(growable: false);
 
-  void _precache() {
-    for (final path in _imagePaths) {
-      precacheImage(AssetImage(path), context);
+  void _precache([int? current]) {
+    final paths = _imagePaths;
+    if (paths.isEmpty) return;
+    // O `PageView` constrói a página atual e as vizinhas. Precachear só essa
+    // janela evita segurar 12 artes 1080x1230 decodificadas (~64 MB) — o
+    // login é a primeira tela e roda em aparelho de entrada.
+    final page = (current ?? _page).clamp(0, paths.length - 1).toInt();
+    for (final i in {page - 1, page, page + 1}) {
+      if (i < 0 || i >= paths.length) continue;
+      precacheImage(AssetImage(paths[i]), context);
     }
   }
 
+  /// Verdadeiro enquanto o foco está em um campo de texto da tela.
+  ///
+  /// O nó focado vem do [FocusScope] da tela — não do `FocusManager` global —
+  /// e a árvore de widgets só é inspecionada quando o contexto do nó está
+  /// ativo. Na troca de layout do login (teclado abre/fecha) o `TextField` é
+  /// desativado por alguns instantes, e buscar um ancestral nesse contexto
+  /// estoura "Looking up a deactivated widget's ancestor is unsafe".
+  bool _hasFocusedField() {
+    final focused = _scope?.focusedChild;
+    if (focused == null) return false;
+    final ctx = focused.context;
+    if (ctx == null) return false;
+    if (!kReleaseMode && ctx is Element && !ctx.debugIsActive) {
+      // Contexto desativado: não dá para inspecionar a árvore com segurança.
+      // O comportamento conservador é pausar o autoplay.
+      return true;
+    }
+    // `TextField` constrói um `EditableText` — um dos dois basta.
+    return ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
   void _onFocusChange() {
-    final focus = FocusManager.instance.primaryFocus;
-    final isTextField = focus != null &&
-        focus.context != null &&
-        focus.context!.findAncestorWidgetOfExactType<TextField>() != null;
+    final isTextField = _hasFocusedField();
     if (isTextField == _fieldFocused) return;
+    if (!mounted) return;
     setState(() => _fieldFocused = isTextField);
     _syncAutoplay();
   }
 
+  /// O carrossel é sempre automático (pedido do produto). Acessibilidade
+  /// (`disableAnimations`) não desliga o avanço — só a transição, em [_next].
   bool get _canAutoplay =>
-      !_reduceMotion &&
-      !_touched &&
-      !_fieldFocused &&
-      _imagePaths.length > 1;
+      !_touched && !_fieldFocused && _imagePaths.length > 1;
 
   void _syncAutoplay() {
     if (_canAutoplay) {
@@ -151,6 +193,11 @@ class _CarouselDestaquesState extends State<CarouselDestaques>
     if (_page >= _imagePaths.length - 1) {
       // Loop: volta ao primeiro sem animar para trás por todas as páginas.
       _controller.jumpToPage(0);
+      return;
+    }
+    // Acessibilidade: o avanço continua, mas sem transição animada.
+    if (_reduceMotion) {
+      _controller.jumpToPage(_page + 1);
       return;
     }
     _controller.nextPage(
@@ -218,7 +265,10 @@ class _CarouselDestaquesState extends State<CarouselDestaques>
                   child: PageView.builder(
                     controller: _controller,
                     itemCount: paths.length,
-                    onPageChanged: (i) => setState(() => _page = i),
+                    onPageChanged: (i) {
+                      setState(() => _page = i);
+                      _precache(i);
+                    },
                     itemBuilder: (context, index) {
                       final path = paths[index];
                       return Padding(

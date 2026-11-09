@@ -28,6 +28,10 @@ class _LoginScreenState extends State<LoginScreen> {
   late final FocusNode _emailFocus;
   late final FocusNode _otpFocus;
 
+  /// Mantém o cartão (e a conexão do teclado) vivo quando o layout troca
+  /// entre "herói + cartão" e "cartão rolável" ao abrir o teclado.
+  final _cardKey = GlobalKey(debugLabel: 'auth-card');
+
   int _step = 0; // 0 = numero, 1 = email, 2 = OTP
   bool _busy = false;
   String? _error;
@@ -156,6 +160,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 final logoWidth =
                     (constraints.maxWidth * 0.55).clamp(180.0, 320.0).toDouble();
                 final card = _AuthCard(
+                  key: _cardKey,
                   step: _step,
                   phone: _phone,
                   email: _email,
@@ -249,6 +254,7 @@ class _LoginScreenState extends State<LoginScreen> {
 /// Card com o formulário da etapa atual.
 class _AuthCard extends StatelessWidget {
   const _AuthCard({
+    super.key,
     required this.step,
     required this.phone,
     required this.email,

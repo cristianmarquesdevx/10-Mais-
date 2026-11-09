@@ -104,12 +104,12 @@ void main() {
     );
   });
 
-  semanticsTest('não faz autoplay com disableAnimations', (tester) async {
+  semanticsTest('com disableAnimations continua automático (salto)', (tester) async {
     await pumpCarousel(tester, disableAnimations: true);
 
-    await tester.pump(const Duration(seconds: 10));
+    await tester.pump(const Duration(seconds: 4));
 
-    expect(find.bySemanticsLabel('Página 1 de 4'), findsOneWidget);
+    expect(find.bySemanticsLabel('Página 2 de 4'), findsOneWidget);
   });
 
   semanticsTest('no último aviso volta ao primeiro (loop)', (tester) async {

@@ -8,8 +8,8 @@ import 'package:parceiro/src/theme/theme.dart';
 /// M4 — carrossel reutilizável do login: autoplay de 4 s, loop, pausa com o
 /// dedo na tela e com campo focado, `disableAnimations` e `Semantics`.
 ///
-/// Por padrão o parceiro mostra um único pôster (ganhos do motorista); os
-/// casos de autoplay/loop usam os cinco pôsteres via `items`.
+/// Por padrão o parceiro mostra a campanha completa do motorista (12 pôsteres,
+/// em autoplay); os casos de autoplay/loop também usam itens explícitos.
 void main() {
   final multiItems = AppAssets.carrosselLoginTodos
       .map((imagem) => <String, dynamic>{'imagem': imagem})
@@ -65,20 +65,20 @@ void main() {
     await tester.pump();
   }
 
-  semanticsTest('por padrão mostra só o pôster do motorista', (tester) async {
+  semanticsTest('por padrão mostra a campanha do motorista', (tester) async {
     await pumpCarousel(tester);
 
     expect(find.bySemanticsLabel('Destaques do 10 é Mais'), findsOneWidget);
     expect(
-      find.bySemanticsLabel('Mais ganhos para o motorista'),
+      find.bySemanticsLabel('Seja parceiro 10 é Mais'),
       findsOneWidget,
     );
-    expect(find.bySemanticsLabel('Página 1 de 1'), findsNothing,
-        reason: 'um pôster só não tem paginação');
+    expect(find.bySemanticsLabel('Página 1 de 12'), findsOneWidget);
 
-    // Um único item: não há para onde avançar.
-    await tester.pump(const Duration(seconds: 8));
-    expect(find.bySemanticsLabel('Página 1 de 1'), findsNothing);
+    // A campanha roda sozinha como qualquer carrossel com mais de um item.
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.bySemanticsLabel('Página 2 de 12'), findsOneWidget);
   });
 
   semanticsTest('avança sozinho a cada 4 s', (tester) async {
@@ -129,12 +129,13 @@ void main() {
     );
   });
 
-  semanticsTest('não faz autoplay com disableAnimations', (tester) async {
+  semanticsTest('continua automático com disableAnimations (salto)',
+      (tester) async {
     await pumpCarousel(tester, items: multiItems, disableAnimations: true);
 
-    await tester.pump(const Duration(seconds: 10));
+    await tester.pump(const Duration(seconds: 4));
 
-    expect(find.bySemanticsLabel('Página 1 de 5'), findsOneWidget);
+    expect(find.bySemanticsLabel('Página 2 de 5'), findsOneWidget);
   });
 
   semanticsTest('no último aviso volta ao primeiro (loop)', (tester) async {
