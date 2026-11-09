@@ -61,6 +61,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PASSAGEIRO = "app.dezemais.passageiro"
 PARCEIRO = "app.dezemais.parceiro"
+# Preço isolado na tela (o `brl` do app): "R$ 7,50".
+MONEY_RE = re.compile(r"^R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})$")
 # Sem --avd: usa o único AVD instalado (e falha listando os candidatos se houver
 # mais de um), para o teste não depender do nome do AVD de cada máquina.
 EMULATOR_PORT = 5554
@@ -171,16 +173,44 @@ class Adb:
         )
 
     def launch(self, package: str) -> None:
-        out = run(
-            self.cmd(
-                "shell", "monkey", "-p", package,
-                "-c", "android.intent.category.LAUNCHER", "1",
-            ),
-            capture=True,
-            timeout=60,
-        )
-        if "Events injected: 1" not in out:
-            raise E2EFailure(f"não consegui abrir {package}:\n{out}")
+        """Abre o app e garante que ele fica em primeiro plano.
+
+        O `monkey` injeta o evento, mas o app às vezes fica **por baixo** de
+        outra janela (keyguard, tela de bloqueio, widget do launcher): o
+        uiautomator passa a ver a tela errada e o fluxo falha como se o
+        produto estivesse quebrado. Aqui a tela é acordada, o keyguard sai e
+        o foco é conferido — com uma segunda tentativa.
+        """
+        for attempt in range(2):
+            out = run(
+                self.cmd(
+                    "shell", "monkey", "-p", package,
+                    "-c", "android.intent.category.LAUNCHER", "1",
+                ),
+                capture=True,
+                timeout=60,
+            )
+            if "Events injected: 1" not in out:
+                raise E2EFailure(f"não consegui abrir {package}:\n{out}")
+            if self._focused_within(package, timeout=15):
+                return
+            if attempt == 0:
+                print(f"    {package} não ficou em foco; acordando a tela")
+                self.shell("input", "keyevent", "KEYCODE_WAKEUP")
+                self.shell("wm", "dismiss-keyguard")
+                time.sleep(2)
+        print(f"    aviso: {package} não ficou em foco (o fluxo vai decidir)")
+
+    def _focused_within(self, package: str, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if self.current_package() == package:
+                    return True
+            except E2EFailure:
+                pass
+            time.sleep(1)
+        return False
 
     def state(self) -> str | None:
         """Estado do dispositivo no adb ('device', 'offline' ou None)."""
@@ -201,6 +231,16 @@ class Adb:
         return match.group(1) if match else None
 
 
+def fix_geo(adb: Adb) -> None:
+    """Reposiciona o AVD na praça piloto (Centro de Porto Velho).
+
+    `emu` é comando do **console** do emulador, não do shell do Android:
+    `adb shell emu ...` responde "inaccessible or not found" no API 37. O
+    caminho certo é `adb emu geo fix <lon> <lat>` (sem `shell`).
+    """
+    run(adb.cmd("emu", "geo", "fix", "-63.9039", "-8.7607"), capture=True)
+
+
 def tune_device(adb: Adb) -> None:
     """Deixa o dispositivo determinístico: sem animações, sem diálogo de ANR."""
     settings = {
@@ -212,6 +252,11 @@ def tune_device(adb: Adb) -> None:
         # modal esconde o app do dump. Sem diálogos de erro.
         "hide_error_dialogs": "1",
         "show_first_crash_dialog": "0",
+        # O freezer congela apps em cache. O app do parceiro fica em segundo
+        # plano durante o pedido do passageiro e, congelado, não responde ao
+        # evento de modo toque em 5 s — o Android mata por "bg anr" e o login
+        # em memória se perde. No teste, manter o processo descongelado.
+        "cached_apps_freezer": "disabled",
     }
     for key, value in settings.items():
         run(adb.cmd("shell", "settings", "put", "global", key, value), capture=True)
@@ -230,7 +275,7 @@ def tune_device(adb: Adb) -> None:
     # responde fora da área de serviço e o radar procura motorista em outra
     # cidade — o teste passaria a acusar "nenhum motorista" sem ser bug.
     try:
-        run(adb.cmd("emu", "geo", "fix", "-63.9039", "-8.7607"), capture=True)
+        fix_geo(adb)
     except E2EFailure:
         pass  # dispositivo físico: não há geo fix
     # System UI ainda se estabiliza depois do boot_completed.
@@ -497,6 +542,43 @@ class Ui:
         unique = list(dict.fromkeys(labels))[:limit]
         return " | ".join(unique) if unique else "(sem rótulos)"
 
+    def price_shown(self, timeout: float = 10.0) -> float | None:
+        """Valor da cotação que o passageiro está vendo agora.
+
+        O Flutter **mescla** a semântica do card inteiro num nó só: o
+        rótulo vem como "Valor no momento\\nvale por 69s\\nR$ 7,50\\nBase
+        R$ 6,10 · ...". Por isso o preço é procurado **linha a linha** e
+        precisa ser a linha inteira — a linha "Base R$ 6,10 · ..." é a
+        conta, não o valor cobrado.
+
+        É a prova do lado do app: o número que está na tela.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                root = self.dump(save_on_error=False)
+            except E2EFailure:
+                time.sleep(0.5)
+                continue
+            valor = self._price_in(root, prefer_card=True)
+            if valor is None:
+                valor = self._price_in(root, prefer_card=False)
+            if valor is not None:
+                return valor
+            time.sleep(0.5)
+        return None
+
+    def _price_in(self, root: ET.Element, *, prefer_card: bool) -> float | None:
+        """Preço isolado nos rótulos do dump (card da cotação primeiro)."""
+        for label, *_ in self.nodes(root):
+            if prefer_card and "Valor no momento" not in label:
+                continue
+            for line in label.splitlines():
+                m = MONEY_RE.match(line.strip())
+                if m:
+                    return float(m.group(1).replace(".", "").replace(",", "."))
+        return None
+
     def tap_and_wait(
         self,
         tap_text: str,
@@ -692,7 +774,19 @@ def login(ui: Ui, package: str, done_text: str) -> None:
     ui.wait_text("Entrar ou criar conta", timeout=30)
     ui.tap("CONTINUAR", exact=True)
     ui.fill_field("69999999999", label="celular")
-    ui.tap_and_wait("CONTINUAR", "Código de verificação", timeout=60)
+    ui.tap("CONTINUAR", exact=True)
+
+    # M6 (só passageiro): entre o celular e o OTP existe a etapa de e-mail de
+    # recuperação. O parceiro não tem essa etapa; o `find` curto distingue os
+    # dois fluxos sem duplicar o roteiro.
+    if ui.find("E-mail", exact=True, timeout=8) is not None:
+        ui.tap_edit()
+        ui.clear_focused_text()
+        ui.type_text("e2e@dezemais.app")
+        ui.hide_keyboard()
+        ui.tap("CONTINUAR", exact=True)
+
+    ui.wait_text("Código de verificação", timeout=60)
     ui.fill_field("1234", label="código OTP")
     ui.tap_and_wait("ENTRAR", done_text, timeout=60)
 
@@ -703,20 +797,22 @@ def ensure_online(ui: Ui) -> None:
     # reenvia a posição da praça piloto antes de tocar de novo.
     for attempt in range(1, 4):
         ui.tap("FICAR ONLINE", exact=True, timeout=30)
+        # O topo minimalista não tem mais chip "ONLINE": o estado online é
+        # provado pelo próprio CTA, que vira "FICAR OFFLINE".
         try:
-            ui.wait_text("ONLINE", exact=True, timeout=25)
+            ui.wait_text("FICAR OFFLINE", exact=True, timeout=25)
         except E2EFailure:
             if attempt == 3:
                 raise
             print(f"    sem ONLINE (tentativa {attempt}); reenviando posição")
-            ui.adb.shell("emu", "geo", "fix", "-63.9039", "-8.7607")
+            fix_geo(ui.adb)
             time.sleep(5)
             continue
         ui.shot("01-parceiro-online")
         return
 
 
-def request_ride(ui: Ui) -> None:
+def request_ride(ui: Ui) -> float:
     print("  passageiro: pedir corrida")
     ui.wait_text("Para onde?", exact=True, timeout=30)
     ui.shot("02-passageiro-home")
@@ -733,6 +829,16 @@ def request_ride(ui: Ui) -> None:
     ui.type_text("1234")  # campo do diálogo entra focado (autofocus)
     ui.tap_and_wait("Confirmar", "Confirmar destino", timeout=20)
     ui.wait_text("Chamar", timeout=20)
+    # O valor que o passageiro está vendo agora — é contra ele que o
+    # servidor vai conferir o preço cobrado no fim do fluxo.
+    shown = ui.price_shown(timeout=10)
+    if shown is None:
+        ui.shot("failure-sem-cotacao")
+        raise E2EFailure(
+            "não encontrei o valor da cotação na tela antes de chamar "
+            f"— rótulos: {ui.visible_summary(limit=12)}"
+        )
+    print(f"    cotação na tela: R$ {shown:.2f}")
     ui.tap_and_wait("Chamar", "Busca ativa", timeout=45)
     # O radar é requisito do fluxo: com parceiro online ele TEM de responder
     # (antes a URL duplicava /nearby e a tela anunciava "Radar indisponível").
@@ -741,6 +847,7 @@ def request_ride(ui: Ui) -> None:
         ui.shot("failure-radar-indisponivel")
         raise E2EFailure("radar respondeu indisponível durante a busca")
     ui.shot("03-passageiro-buscando")
+    return shown
 
 
 def accept_and_finish(ui: Ui) -> None:
@@ -775,7 +882,7 @@ def pay_and_rate(ui: Ui) -> None:
     ui.shot("09-passageiro-home-final")
 
 
-def assert_ride(base: str) -> dict:
+def assert_ride(base: str, shown: float | None = None) -> dict:
     print("  API: conferindo o estado final")
     active = api(base, "GET", "/rides?active=1")[1]
     if active.get("rides"):
@@ -795,7 +902,15 @@ def assert_ride(base: str) -> dict:
         "fare_total preenchido": isinstance(detail.get("fare_total"), (int, float)),
         "parceiro real (não simulado)":
             "simulado" not in str((detail.get("partner") or {}).get("name", "")),
+        # O preço veio de uma COTAÇÃO CONGELADA no servidor: o app apresentou
+        # o quote_id e o servidor cobrou o valor gravado (nunca o do cliente).
+        "cotação congelada honrada (quote_id)": bool(detail.get("quote_id")),
     }
+    if shown is not None:
+        checks["preço cobrado = preço mostrado na tela"] = (
+            isinstance(detail.get("fare_total"), (int, float))
+            and abs(float(detail["fare_total"]) - shown) < 0.005
+        )
     failed = [name for name, ok in checks.items() if not ok]
     if failed:
         raise E2EFailure(
@@ -814,6 +929,8 @@ def assert_ride(base: str) -> dict:
     print(
         f"    ok  {ride_id} FINALIZADA · CONFIRMED · "
         f"R$ {detail['fare_total']:.2f} · avaliada"
+        + (f" · cotação {detail.get('quote_id', '')[:8]}"
+           if detail.get("quote_id") else "")
     )
     return detail
 
@@ -1087,7 +1204,7 @@ def run_attempt(args, artifacts: Path, tools: dict, need_build: bool) -> dict:
 
         print("\n== passageiro: login e pedido")
         login(ui, PASSAGEIRO, "Para onde?")
-        request_ride(ui)
+        shown = request_ride(ui)
 
         print("\n== parceiro: aceite e transições")
         accept_and_finish(ui)
@@ -1095,16 +1212,20 @@ def run_attempt(args, artifacts: Path, tools: dict, need_build: bool) -> dict:
         print("\n== passageiro: pagamento e avaliação")
         pay_and_rate(ui)
 
-        detail = assert_ride(base)
+        detail = assert_ride(base, shown)
         result.update(
             status="pass",
             ride_id=detail["ride_id"],
             fare_total=detail.get("fare_total"),
+            quoted_fare_shown=shown,
+            quote_id=detail.get("quote_id"),
             status_final=detail.get("status"),
             payment_status=detail.get("payment_status"),
         )
         print("\nPASS — fluxo passageiro ↔ parceiro completo")
         print(f"corrida: {detail['ride_id']}  total: R$ {detail['fare_total']:.2f}")
+        if shown is not None:
+            print(f"cotação na tela: R$ {shown:.2f} (mesmo valor cobrado)")
         print(f"evidências: {artifacts}")
         return result
     except Exception as exc:

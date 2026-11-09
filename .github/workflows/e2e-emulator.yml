@@ -73,3 +73,28 @@ jobs:
           name: e2e-emulator
           path: .preview/e2e_auto/
           retention-days: 7
+
+      # O `result.json` de cada tentativa é a prova (ride_id, total, status).
+      # Ele vai para o resumo do job — dá para ler sem abrir o artefato — e
+      # o job **falha** se o fluxo não passou.
+      - name: Resumo do E2E
+        if: always()
+        run: |
+          set -euo pipefail
+          latest="$(ls -1dt .preview/e2e_auto/*/ 2>/dev/null | head -n 1 || true)"
+          if [ -z "$latest" ]; then
+            echo "### E2E: nenhuma execução produziu result.json" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          {
+            echo "### E2E passageiro ↔ parceiro"
+            echo
+            echo '```json'
+            cat "$latest/result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          status="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('status',''))" "$latest/result.json")"
+          if [ "$status" != "pass" ]; then
+            echo "E2E terminou com status: ${status:-desconhecido}" >&2
+            exit 1
+          fi
