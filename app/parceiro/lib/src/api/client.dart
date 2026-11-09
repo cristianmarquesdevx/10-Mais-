@@ -738,8 +738,18 @@ class ApiClient {
       ..encoding = utf8;
     if (body != null) req.body = jsonEncode(body);
 
-    final streamed = await _http.send(req);
-    final resp = await http.Response.fromStream(streamed);
+    // Falha de transporte (sem rede, servidor fora, conexão caiu no meio)
+    // vira ApiProblem como qualquer outro erro: os controllers só tratam
+    // ApiProblem, e uma exceção crua aqui escapava como unhandled.
+    final http.Response resp;
+    try {
+      final streamed = await _http.send(req);
+      resp = await http.Response.fromStream(streamed);
+    } on ApiProblem {
+      rethrow;
+    } catch (e) {
+      throw ApiProblem(0, 'offline', 'Sem conexão com o servidor', '$e');
+    }
     if (resp.statusCode >= 400) throw ApiProblem.fromResponse(resp);
     if (resp.body.isEmpty) return <String, dynamic>{};
     return jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;

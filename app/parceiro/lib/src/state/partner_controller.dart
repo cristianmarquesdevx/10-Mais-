@@ -153,6 +153,10 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
       await action();
     } on ApiProblem catch (p) {
       lastErrorCode = p.code;
+    } catch (_) {
+      // Resposta inesperada (parse/contrato) não pode derrubar a tela: as
+      // chamadas daqui são fire-and-forget (ex.: loadMe no initState).
+      lastErrorCode = 'offline';
     } finally {
       busy = false;
       notifyListeners();

@@ -169,4 +169,14 @@ void main() {
       throwsA(isA<ApiProblem>().having((p) => p.code, 'code', 'already_rated')),
     );
   });
+
+  test('falha de rede vira ApiProblem(offline), não exceção crua', () async {
+    final api = clientWith(MockClient((req) async {
+      throw http.ClientException('Connection refused', req.url);
+    }));
+    await expectLater(
+      api.me(),
+      throwsA(isA<ApiProblem>().having((p) => p.code, 'code', 'offline')),
+    );
+  });
 }
