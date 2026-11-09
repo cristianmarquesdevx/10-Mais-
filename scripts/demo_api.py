@@ -58,6 +58,10 @@ CLOCK_OFFSET = 0.0
 # presença. Fica aqui para a nota sobreviver a sair/voltar do online — senão
 # cada sessão recomeçava em 4,9/301 e as avaliações da semana se perdiam.
 PROFILE_RATING = {"value": 4.9, "count": 301}
+# Validade da cotação (GET /quote → POST /rides). Espelha Quote.expires_in do
+# contrato: o valor mostrado vale por 90 s e é de uso único. O servidor é
+# quem manda no preço — o `quoted_fare` do cliente nunca vira fare_total.
+QUOTE_TTL_S = 90
 
 def now() -> float:
     # Relógio da demo: 0 em uso normal. O roteiro de demonstração
@@ -92,6 +96,9 @@ def scratch_ticket_view(ticket: dict) -> dict:
 STATE = {
     "rides": {},          # ride_id -> dict
     "offers": {},         # offer_id -> dict
+    # Cotação congelada: quote_id -> fare_total/expira_em/rota. Emitida pelo
+    # GET /quote e consumida (uma vez) pelo POST /rides.
+    "quotes": {},
     "geo_cache": {},      # query normalizada -> resultado (cache do Nominatim)
     "road_cache": {},     # origem/destino -> km rodoviário (cache do OSRM)
     "path_cache": {},     # origem/destino -> geometria da rota (percurso do parceiro)
@@ -241,6 +248,9 @@ def ride_view(r: dict) -> dict:
         "pricing_mode": r.get("pricing_mode"),
         "fare_total": r.get("fare_total"),
         "proposed_amount": r.get("proposed_amount"),
+        # Cotação honrada no pedido (auditoria do preço): null quando o
+        # servidor recalculou sem `quote_id`.
+        "quote_id": r.get("quote_id"),
         "eta_seconds": r.get("eta_seconds"),
         "distance_km": r.get("distance_km"),
         "origin": r["origin"],
@@ -405,13 +415,12 @@ def _road_km(olat: float, olon: float, dlat: float, dlon: float) -> float:
     return km
 
 
-def _quote(km: float, olat: float, olon: float) -> dict:
-    """Preço do momento (GET /quote): tarifa dinâmica do servidor.
+def _quote_fare(km: float, olat: float, olon: float) -> dict:
+    """Preço do momento sem emitir cotação (GET /quote e recálculo do pedido).
 
-    base = fixo + por km x distância da rota × multiplicador de demanda (zona
+    base = fixo + por km × distância da rota × multiplicador de demanda (zona
     da origem + calor ao vivo) × rush da hora — o valor muda a cada hora e
-    por origem. expires_in diz por quanto tempo o servidor honra o valor
-    mostrado ao passageiro.
+    por origem.
     """
     # Preça o km que o card exibe (1 casa) e não a fração invisível: assim
     # "Base R$ 7,70 · 1,2 km" fecha na conta de quem lê a tela.
@@ -428,11 +437,79 @@ def _quote(km: float, olat: float, olon: float) -> dict:
     rush = 1.18 if hour in (7, 8, 9, 17, 18, 19) else (0.88 if hour <= 5 else 1.0)
     return {
         "fare_total": round(base * demand * rush, 2),
-        "expires_in": 90,
         "currency": "BRL",
         "breakdown": {"distance_km": km, "base": base,
                       "demand_multiplier": demand, "rush_multiplier": rush},
     }
+
+
+def _quote(km: float, olat: float, olon: float,
+           dlat: float, dlon: float) -> dict:
+    """GET /quote: preço do momento + cotação de uso único.
+
+    `expires_in` diz por quanto tempo o servidor honra este valor. O
+    `quote_id` é o que o POST /rides apresenta; o valor do cliente não
+    decide o preço em nenhum caminho.
+    """
+    priced = _quote_fare(km, olat, olon)
+    qid = new_id()
+    STATE["quotes"][qid] = {
+        "fare_total": priced["fare_total"],
+        "expires_at": now() + QUOTE_TTL_S,
+        "origin": {"lat": olat, "lon": olon},
+        "destination": {"lat": dlat, "lon": dlon},
+    }
+    return {"quote_id": qid, "expires_in": QUOTE_TTL_S, **priced}
+
+
+def _same_point(a: dict, b: dict, tol: float = 5e-4) -> bool:
+    """Mesmo ponto com folga para o jitter do GPS (~50 m)."""
+    try:
+        return (abs(a["lat"] - b["lat"]) <= tol
+                and abs(a["lon"] - b["lon"]) <= tol)
+    except (KeyError, TypeError):
+        return False
+
+
+def _resolve_quote(body: dict, origin: dict, destination: dict,
+                   km: float) -> tuple[float | None, tuple[int, dict] | None]:
+    """Preço TARIFF do pedido — sempre calculado/validado no servidor.
+
+    Com `quote_id`, vale o valor gravado no GET /quote e só até `expires_in`,
+    na mesma rota e uma única vez. Sem id, o servidor recalcula pela rota e
+    ignora o `quoted_fare` do corpo (preço de cliente nunca vira cobrança).
+    """
+    qid = body.get("quote_id")
+    if not qid:
+        return _quote_fare(km,
+                           origin.get("lat", -8.7607),
+                           origin.get("lon", -63.9039))["fare_total"], None
+
+    # Uso único por construção: a cotação sai do estado já na validação,
+    # mesmo quando ela falha (replay não reaproveita nem tenta de novo).
+    quote = STATE["quotes"].pop(qid, None)
+    if quote is None:
+        return None, (422, {"title": "Cotação não encontrada", "status": 422,
+                            "code": "quote_not_found"})
+    if now() > quote["expires_at"]:
+        return None, (422, {"title": "Cotação expirada", "status": 422,
+                            "code": "quote_expired"})
+    if not (_same_point(quote["origin"], origin)
+            and _same_point(quote["destination"], destination)):
+        return None, (422, {"title": "Cotação de outra rota", "status": 422,
+                            "code": "quote_mismatch"})
+
+    sent = body.get("quoted_fare")
+    if sent is not None:
+        try:
+            sent_fare = float(sent)
+        except (TypeError, ValueError):
+            sent_fare = None
+        if sent_fare is None or abs(sent_fare - quote["fare_total"]) > 0.005:
+            return None, (422, {"title": "Valor divergente", "status": 422,
+                                "code": "quote_fare_mismatch"})
+
+    return quote["fare_total"], None
 
 
 def _path_km(path: list[list[float]]) -> float:
@@ -1071,6 +1148,11 @@ def _dispatch_next(r: dict) -> dict | None:
 def _dispatch_tick() -> None:
     """Roda a cada request: expira ofertas vencidas e oferta corridas órfãs."""
     _expire_offers()
+    # Cotações vencidas não crescem para sempre. A folga de 5 min mantém a
+    # resposta correta (quote_expired) para quem tenta logo depois de vencer.
+    for qid in [q for q, v in STATE["quotes"].items()
+                if now() > v["expires_at"] + 300]:
+        STATE["quotes"].pop(qid, None)
     for r in STATE["rides"].values():
         if r.get("status") == "BUSCANDO":
             _dispatch_next(r)
@@ -1090,7 +1172,7 @@ def route(method: str, path: str, query: dict, body: dict) -> tuple[int, dict]:
         dlat, dlon = _f("dest_lat", -8.7647), _f("dest_lon", -63.8969)
         km = _road_km(olat, olon, dlat, dlon)
         with LOCK:
-            return 200, _quote(km, olat, olon)
+            return 200, _quote(km, olat, olon, dlat, dlon)
     if method == "POST" and path == "/rides":
         # A corrida congela a distância da rota no pedido: cotação, oferta e
         # recibo passam a contar o MESMO km. Resolve antes do LOCK pelo mesmo
@@ -1154,21 +1236,33 @@ def _route(method: str, path: str, query: dict, body: dict,
                                "A_CAMINHO", "CHEGOU", "EM_VIAGEM")
                for r in STATE["rides"].values()):
             return 409, {"title": "Corrida ativa", "status": 409, "code": "active_ride_exists"}
+        origin = body.get("origin") or {"lat": -8.7607, "lon": -63.9039}
+        destination = body.get("destination") or {"lat": -8.7647, "lon": -63.8969}
+        # O preço do pedido TARIFF vem SEMPRE do servidor: cotação congelada
+        # (quote_id) ou recálculo pela rota — nunca do quoted_fare do corpo.
+        fare_snapshot = None
+        quote_used = None
+        if pricing == "TARIFF":
+            fare_snapshot, error = _resolve_quote(
+                body, origin, destination,
+                distance_km if distance_km is not None else 1.0)
+            if error:
+                return error
+            # Guarda a cotação honrada na corrida: é a prova (auditável) de
+            # que o preço veio do servidor e não do cliente.
+            quote_used = body.get("quote_id")
         rid = new_id()
-        quoted = body.get("quoted_fare")
-        fare_snapshot = (quoted if pricing == "TARIFF"
-                         and isinstance(quoted, (int, float)) and quoted > 0
-                         else None)
         STATE["heatmap_hits"].append({"ts": now(),
-                                     "lat": body.get("origin", {}).get("lat", -8.7607),
-                                     "lon": body.get("origin", {}).get("lon", -63.9039)})
+                                     "lat": origin.get("lat", -8.7607),
+                                     "lon": origin.get("lon", -63.9039)})
         STATE["rides"][rid] = {
             "id": rid, "status": "BUSCANDO", "driver": None,
             "pricing_mode": None, "proposed_amount": proposed,
             "fare_total": fare_snapshot, "eta_seconds": None,
             "distance_km": distance_km,
-            "origin": body.get("origin", {"lat": -8.7607, "lon": -63.9039}),
-            "destination": body.get("destination", {"lat": -8.7647, "lon": -63.8969}),
+            "quote_id": quote_used,
+            "origin": origin,
+            "destination": destination,
             "origin_address": body.get("origin_address"),
             "destination_address": body.get("destination_address"),
             "partner": None, "payment_status": "NOT_DUE",

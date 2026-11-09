@@ -179,6 +179,10 @@ class Ride {
 class Quote {
   final double fareTotal;
   final int expiresIn;
+
+  /// Id que o POST /rides apresenta para o servidor honrar EXATAMENTE este
+  /// valor (uso único, até expirar). Sem ele o servidor recalcula.
+  final String? quoteId;
   final String? currency;
   final Map<String, dynamic>? breakdown;
   final DateTime fetchedAt;
@@ -186,6 +190,7 @@ class Quote {
   Quote({
     required this.fareTotal,
     required this.expiresIn,
+    this.quoteId,
     this.currency,
     this.breakdown,
   }) : fetchedAt = DateTime.now();
@@ -196,6 +201,7 @@ class Quote {
   factory Quote.fromJson(Map<String, dynamic> j) => Quote(
         fareTotal: (j['fare_total'] as num).toDouble(),
         expiresIn: j['expires_in'] as int? ?? 90,
+        quoteId: j['quote_id'] as String?,
         currency: j['currency'] as String?,
         breakdown: j['breakdown'] as Map<String, dynamic>?,
       );
@@ -695,6 +701,7 @@ class ApiClient {
     required GeoPoint destination,
     required PricingMode mode,
     double? proposedAmount,
+    String? quoteId,
     double? quotedFare,
     String? originAddress,
     String? destinationAddress,
@@ -709,6 +716,9 @@ class ApiClient {
         'destination': destination.toJson(),
         'pricing_mode': mode == PricingMode.tariff ? 'TARIFF' : 'NEGOTIATED',
         if (proposedAmount != null) 'proposed_amount': proposedAmount,
+        if (quoteId != null) 'quote_id': quoteId,
+        // Só informativo: o servidor valida o valor contra a cotação e nunca
+        // aceita este número como preço final.
         if (quotedFare != null) 'quoted_fare': quotedFare,
         if (originAddress != null) 'origin_address': originAddress,
         if (destinationAddress != null)

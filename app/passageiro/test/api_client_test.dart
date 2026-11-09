@@ -66,6 +66,42 @@ void main() {
     expect(body.containsKey('proposed_amount'), isFalse);
   });
 
+  test('cotação traz quote_id e o pedido TARIFF o envia', () async {
+    final api = clientWith(MockClient((req) async {
+      seen.add(req);
+      if (req.method == 'GET') {
+        return http.Response(
+          jsonEncode({
+            'quote_id': '11111111-1111-4111-8111-111111111111',
+            'fare_total': 9.4,
+            'expires_in': 90,
+            'currency': 'BRL',
+          }),
+          200,
+        );
+      }
+      return http.Response('{}', 201);
+    }));
+
+    final q = await api.quote(
+      origin: const GeoPoint(-8.7607, -63.9039),
+      destination: const GeoPoint(-8.7647, -63.8969),
+    );
+    expect(q.quoteId, '11111111-1111-4111-8111-111111111111');
+    expect(q.expiresIn, 90);
+
+    await api.createRide(
+      origin: const GeoPoint(-8.7607, -63.9039),
+      destination: const GeoPoint(-8.7647, -63.8969),
+      mode: PricingMode.tariff,
+      quoteId: q.quoteId,
+      quotedFare: q.fareTotal,
+    );
+    final body = jsonDecode(seen.last.body) as Map<String, dynamic>;
+    expect(body['quote_id'], q.quoteId);
+    expect(body['quoted_fare'], 9.4);
+  });
+
   test('problem+json 409 vira ApiProblem com code estável', () async {
     final api = clientWith(MockClient((req) async => http.Response(
           jsonEncode({

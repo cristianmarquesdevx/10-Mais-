@@ -89,6 +89,7 @@ def main() -> int:
         "destination": {"lat": -8.7465, "lon": -63.8940},
         "destination_address": "Rua Rogério Weber, 890 - Centro",
         "pricing_mode": "TARIFF",
+        "quote_id": quote["quote_id"],
         "quoted_fare": quote["fare_total"],
         "service": "MOTO",
     }, idem=True)

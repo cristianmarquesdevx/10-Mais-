@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -80,13 +81,21 @@ def main() -> None:
     must(status == 200 and prefs["min_fare"] == 6.5,
          "trocar os tipos não reseta o valor mínimo")
 
+    qs = urllib.parse.urlencode({
+        "origin_lat": ORIGIN[0], "origin_lon": ORIGIN[1],
+        "dest_lat": -8.7647, "dest_lon": -63.8969,
+    })
+    status, cotacao = call(base, "GET", f"/quote?{qs}")
+    must(status == 200 and cotacao.get("quote_id"),
+         "cotação emitida para o pedido (quote_id)")
     status, _ = call(base, "POST", "/rides", {
         "origin": {"lat": ORIGIN[0], "lon": ORIGIN[1]},
         "destination": {"lat": -8.7647, "lon": -63.8969},
         "origin_address": "Centro, 100, Porto Velho - RO",
         "destination_address": "Aeroporto, 248, Porto Velho - RO",
         "pricing_mode": "TARIFF",
-        "quoted_fare": 18.5,
+        "quote_id": cotacao["quote_id"],
+        "quoted_fare": cotacao["fare_total"],
     })
     must(status == 201, "corrida criada")
     rides = call(base, "GET", "/rides?active=1")[1]["rides"]
@@ -130,7 +139,8 @@ def main() -> None:
     must(status == 200, "melhor recusa a oferta")
     # A recusa devolve o que ele perdeu — é o que o app mostra na hora.
     loss = dec.get("loss") or {}
-    must(loss.get("reason") == "DECLINED" and loss.get("lost_amount") == 18.5,
+    must(loss.get("reason") == "DECLINED"
+         and loss.get("lost_amount") == cotacao["fare_total"],
          "recusa devolve valor perdido e motivo")
     must(loss.get("acceptance_rate_before") == 1.0
          and loss["acceptance_rate"] < 1.0,
@@ -145,7 +155,7 @@ def main() -> None:
     status, offers = call(base, "GET", "/offers/mine?driver_id=mid")
     must(status == 200 and len(offers["offers"]) == 1,
          "reoferta vai para o próximo (mid)")
-    must(offers["offers"][0]["amount"] == 18.5,
+    must(offers["offers"][0]["amount"] == cotacao["fare_total"],
          "valor da reoferta é o congelado no pedido")
     must(offers["offers"][0]["dispatch"]["pool"] == 2,
          "a fila encolhe: quem recusou saiu dela")

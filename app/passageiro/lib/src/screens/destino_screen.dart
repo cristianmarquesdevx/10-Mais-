@@ -290,7 +290,9 @@ class _DestinoScreenState extends State<DestinoScreen> {
       destination: destino,
       mode: _mode,
       proposedAmount: _mode == PricingMode.negotiated ? _proposed : null,
-      // TARIFF: o valor que o passageiro está vendo agora (snapshot).
+      // TARIFF: a cotação que o passageiro está vendo agora. O servidor
+      // honra o valor gravado (quote_id) e nunca o número solto do corpo.
+      quoteId: _mode == PricingMode.tariff ? cotacao?.quoteId : null,
       quotedFare: _mode == PricingMode.tariff ? cotacao?.fareTotal : null,
       originAddress: _originFromDevice
           ? 'Sua localização atual'

@@ -18,6 +18,7 @@ import argparse
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -44,6 +45,19 @@ def must(ok: bool, message: str) -> None:
     print(f"  ok  {message}")
 
 
+def quote(base: str, origin: dict, destination: dict) -> dict:
+    """GET /quote — o preço do pedido TARIFF vem daqui (quote_id), não do
+    cliente. Cada chamada emite uma cotação de uso único."""
+    qs = urllib.parse.urlencode({
+        "origin_lat": origin["lat"], "origin_lon": origin["lon"],
+        "dest_lat": destination["lat"], "dest_lon": destination["lon"],
+    })
+    status, body = call(base, "GET", f"/quote?{qs}")
+    must(status == 200 and body.get("quote_id"),
+         "GET /quote emite quote_id com validade")
+    return body
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8787")
@@ -68,13 +82,18 @@ def main() -> None:
                      {"lat": -8.7610, "lon": -63.9040}, idem=True)
     must(status == 200, "POST /partner/online publica presença para o despacho")
 
+    origin = {"lat": -8.7607, "lon": -63.9039}
+    destination = {"lat": -8.7647, "lon": -63.8969}
+    cotacao = quote(base, origin, destination)
+
     status, _ = call(base, "POST", "/rides", {
-        "origin": {"lat": -8.7607, "lon": -63.9039},
-        "destination": {"lat": -8.7647, "lon": -63.8969},
+        "origin": origin,
+        "destination": destination,
         "origin_address": "Centro, Porto Velho - RO",
         "destination_address": "Aeroporto, Porto Velho - RO",
         "pricing_mode": "TARIFF",
-        "quoted_fare": 18.5,
+        "quote_id": cotacao["quote_id"],
+        "quoted_fare": cotacao["fare_total"],
     }, idem=True)
     must(status == 201, "POST /rides cria a corrida com Idempotency-Key")
 
@@ -98,7 +117,8 @@ def main() -> None:
     must(offer is not None, "GET /offers/mine entrega a oferta ao parceiro")
     assert offer is not None
     must(offer["ride_id"] == ride_id, "oferta aponta para a corrida criada")
-    must(offer["amount"] == 18.5, "valor da oferta bate com o congelado no pedido")
+    must(offer["amount"] == cotacao["fare_total"],
+         "valor da oferta bate com a cotação congelada (quote_id)")
     must(offer["trip_distance_km"] == ride.get("distance_km"),
          "km da oferta igual ao congelado no pedido (mesma distancia de rota)")
 
@@ -125,7 +145,7 @@ def main() -> None:
 
     status, _ = call(base, "POST", "/partner/transitions", {
         "ride_id": ride_id, "to": "FINALIZADA",
-        "fare_total": 18.5, "cash_declared": True,
+        "fare_total": cotacao["fare_total"], "cash_declared": True,
     }, idem=True)
     must(status == 200, "transição para FINALIZADA com fare_total/cash_declared")
 
@@ -134,7 +154,8 @@ def main() -> None:
     must(done.get("distance_km") == offer["trip_distance_km"],
          "recibo repete o km da oferta (e da cotação)")
     must(done["payment_status"] == "CONFIRMED", "dinheiro declarado confirma o pagamento")
-    must(done["fare_total"] == 18.5, "fare_total final é o valor declarado")
+    must(done["fare_total"] == cotacao["fare_total"],
+         "fare_total final é o valor da cotação congelada")
 
     status, payment = call(base, "POST", "/payments/ride",
                            {"ride_id": ride_id, "method": "PIX"}, idem=True)
@@ -158,13 +179,15 @@ def main() -> None:
     # Corrida terminada SEM dinheiro declarado nasce PENDING; o app mostra
     # "Já paguei" e só avança quando este endpoint (webhook do PSP na demo)
     # devolve CONFIRMED.
+    cotacao2 = quote(base, origin, destination)
     status, _ = call(base, "POST", "/rides", {
-        "origin": {"lat": -8.7607, "lon": -63.9039},
-        "destination": {"lat": -8.7647, "lon": -63.8969},
+        "origin": origin,
+        "destination": destination,
         "origin_address": "Centro, 100, Porto Velho - RO",
         "destination_address": "Aeroporto, 248, Porto Velho - RO",
         "pricing_mode": "TARIFF",
-        "quoted_fare": 14.6,
+        "quote_id": cotacao2["quote_id"],
+        "quoted_fare": cotacao2["fare_total"],
     }, idem=True)
     must(status == 201, "segundo pedido (PIX) criado")
     status, rides = call(base, "GET", "/rides?active=1")
@@ -185,7 +208,7 @@ def main() -> None:
              {"ride_id": pix_ride_id, "to": to}, idem=True)
     call(base, "POST", "/partner/transitions", {
         "ride_id": pix_ride_id, "to": "FINALIZADA",
-        "fare_total": 14.6, "cash_declared": False,
+        "fare_total": cotacao2["fare_total"], "cash_declared": False,
     }, idem=True)
     status, pending = call(base, "GET", f"/rides/{pix_ride_id}")
     must(pending["payment_status"] == "PENDING",

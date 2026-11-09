@@ -797,15 +797,25 @@ components:
           type: number
           nullable: true
           description: >-
-            TARIFF snapshot from GET /quote shown to the passenger at request
-            time; snapshotted as Ride.fare_total (server may revalidate
-            against the floor/cap before honoring it).
+            TARIFF value shown to the passenger. Informative only: the server
+            never uses it as Ride.fare_total — it validates the frozen quote
+            (or recalculates) and rejects a divergent number.
+        quote_id:
+          type: string
+          format: uuid
+          description: >-
+            Quote emitted by GET /quote. The server honors the stored value
+            until expires_in, for the same route, exactly once.
         payment_method_id: { type: string, format: uuid }
     Quote:
       type: object
       description: Price of the moment — never cached client-side beyond expires_in
-      required: [fare_total, expires_in]
+      required: [quote_id, fare_total, expires_in]
       properties:
+        quote_id:
+          type: string
+          format: uuid
+          description: single-use id presented on POST /rides to honor this value
         fare_total: { type: number }
         expires_in: { type: integer, description: seconds the quote is honored }
         currency: { type: string, enum: [BRL] }
@@ -837,6 +847,13 @@ components:
         pricing_mode: { type: string, enum: [PASSE, COMISSAO], nullable: true }
         fare_total: { type: number, nullable: true }
         proposed_amount: { type: number, nullable: true }
+        quote_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Quote honored when the ride was created (audit trail of the
+            price). Null when the server recalculated without a quote.
         eta_seconds: { type: integer, nullable: true, description: server-computed; never client-derived }
         distance_km:
           type: number
