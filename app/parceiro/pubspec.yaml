@@ -10,6 +10,11 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_map: ^8.3.2
+  # Mapa vetorial (style JSON próprio) — direção visual "Console Noturno".
+  # MapLibre nativo (Android/iOS): sem chave de API, estilo 100% da marca,
+  # tiles OpenFreeMap no piloto. O `flutter_map` segue para as telas que
+  # ainda não migraram e para o fallback raster.
+  maplibre_gl: ^0.28.0
   http: ^1.2.0
   intl: ^0.19.0
   latlong2: ^0.10.1

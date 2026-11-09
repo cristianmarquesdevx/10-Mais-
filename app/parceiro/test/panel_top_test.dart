@@ -17,7 +17,7 @@ import 'package:parceiro/src/widgets/wallet_balance_card.dart';
 ///    passe/comissão e o botão "+ ✓" saíram);
 /// 2. o saldo é do servidor, tem Semantics em reais e abre a Carteira;
 /// 3. o "olho" oculta o valor (privacidade);
-/// 4. a camada de demanda nunca mostra número sem marcar DEMO, e sem dado
+/// 4. a camada de demanda nunca mostra número simulado como real, e sem dado
 ///    real diz "sem dados de demanda".
 http.Response resp(String body, int statusCode) => http.Response(
       body,
@@ -77,7 +77,8 @@ Future<void> pumpFrames(WidgetTester tester, {int frames = 6}) async {
 void _noop() {}
 
 void main() {
-  testWidgets('Topo minimalista: só menu + saldo (sem OFFLINE, sem chip de '
+  testWidgets(
+      'Topo minimalista: só menu + saldo (sem OFFLINE, sem chip de '
       'passe/comissão, sem "+ ✓")', (tester) async {
     final (widget: app, partner: p) = buildApp(
       mock: MockClient((req) async {
@@ -110,7 +111,8 @@ void main() {
     p.dispose();
   });
 
-  testWidgets('Saldo: valor do servidor em reais, com Semantics e números '
+  testWidgets(
+      'Saldo: valor do servidor em reais, com Semantics e números '
       'tabulares', (tester) async {
     final (widget: app, partner: p) = buildApp(
       mock: MockClient((req) async {
@@ -197,7 +199,7 @@ void main() {
     p.dispose();
   });
 
-  testWidgets('Demanda: dado de demonstração vem marcado como DEMO',
+  testWidgets('Demanda: dado simulado aparece sem a palavra DEMO',
       (tester) async {
     final (widget: app, partner: p) = buildApp(
       mock: MockClient((req) async {
@@ -213,17 +215,17 @@ void main() {
     await tester.pumpWidget(app);
     await pumpFrames(tester);
 
-    // Marca d'água no mapa.
-    expect(find.text('DEMO · dados simulados'), findsOneWidget);
-    // E o rótulo da camada diz que é simulado.
-    expect(find.text('DEMO · 1 zonas (simulado)'), findsOneWidget);
+    // O mapa do motorista não exibe nenhum texto DEMO.
+    expect(find.textContaining('DEMO'), findsNothing);
+    // O rótulo continua honesto: diz que o dado é simulado.
+    expect(find.text('1 zonas (simulado)'), findsOneWidget);
     // Nunca aparece como se fosse real.
     expect(find.text('1 zonas quentes'), findsNothing);
 
     p.dispose();
   });
 
-  testWidgets('Demanda: o selo DEMO não fica embaixo do cartão de saldo',
+  testWidgets('Demanda: o selo simulado não cobre o cartão de saldo',
       (tester) async {
     // Tela de celular real (393 x 873 dp): é nela que o selo centralizado
     // no topo caía por baixo do cartão de saldo e era cortado.
@@ -245,17 +247,15 @@ void main() {
     await tester.pumpWidget(app);
     await pumpFrames(tester);
 
-    // O selo e o cartão são irmãos no topo: se o selo descer o bastante,
-    // um pode cobrir o outro e o texto fica cortado (foi o que aconteceu
-    // com a posição fracionária antiga).
-    final selo = tester.getRect(find.text('DEMO · dados simulados'));
+    final rotulo = tester.getRect(find.text('1 zonas (simulado)'));
     final cartao = tester.getRect(find.byType(WalletBalanceCard));
 
-    final sobrepoe =
-        selo.left < cartao.right && selo.right > cartao.left &&
-            selo.top < cartao.bottom && selo.bottom > cartao.top;
+    final sobrepoe = rotulo.left < cartao.right &&
+        rotulo.right > cartao.left &&
+        rotulo.top < cartao.bottom &&
+        rotulo.bottom > cartao.top;
     expect(sobrepoe, isFalse,
-        reason: 'selo $selo colide com o cartão de saldo $cartao');
+        reason: 'rótulo $rotulo colide com o cartão de saldo $cartao');
 
     p.dispose();
   });
@@ -278,7 +278,7 @@ void main() {
 
     expect(find.text('Sem dados de demanda agora'), findsOneWidget);
     expect(find.textContaining('zonas quentes'), findsNothing);
-    expect(find.text('DEMO · dados simulados'), findsNothing);
+    expect(find.textContaining('DEMO'), findsNothing);
 
     p.dispose();
   });

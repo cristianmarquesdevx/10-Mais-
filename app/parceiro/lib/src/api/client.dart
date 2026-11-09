@@ -53,8 +53,8 @@ class HeatZone {
 /// Resposta do calor de chamadas (GET /heatmap).
 ///
 /// [demo] vem do servidor e é a trava de honestidade: dado de demonstração
-/// nunca é apresentado como demanda real — o app marca a camada como DEMO e
-/// um backend de produção simplesmente não devolve o flag.
+/// nunca é apresentado como demanda real — o app marca a camada como
+/// simulada e um backend de produção simplesmente não devolve o flag.
 class HeatSnapshot {
   final List<HeatZone> zones;
 

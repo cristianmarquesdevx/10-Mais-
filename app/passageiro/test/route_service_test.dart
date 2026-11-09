@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:passageiro/src/api/route_service.dart';
-import 'package:passageiro/src/widgets/route_map.dart';
+import 'package:passageiro/src/map/route_map_view.dart';
 
 /// Decodificação da polyline (padrão OSRM/Google, precisão 5) e
 /// comportamento do serviço: rota real quando o servidor responde, traçado

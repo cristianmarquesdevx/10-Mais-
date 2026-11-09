@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../main.dart';
 import '../api/client.dart';
+import '../map/partner_map.dart';
 import '../state/partner_controller.dart';
 import '../theme/theme.dart';
-import '../widgets/heatmap_map.dart';
 import '../widgets/wallet_balance_card.dart';
 
 /// P2 Painel — o mapa ocupa a tela inteira e os controles flutuam sobre ele
@@ -113,10 +113,9 @@ class _PainelScreenState extends State<PainelScreen> {
         children: [
           // Mapa de tela inteira, atrás de tudo. A atribuição do OSM é
           // repetida no painel flutuante, onde não fica coberta.
-          HeatmapMap(
+          PartnerMap(
             zones: _heat.zones,
             online: online,
-            demo: _heat.demo,
             showAttribution: false,
           ),
           SafeArea(
@@ -153,18 +152,6 @@ class _PainelScreenState extends State<PainelScreen> {
                     ],
                   ),
                 ),
-                // Selo "DEMO" da camada de demanda: logo abaixo da linha de
-                // controles, no mesmo fluxo — não pode cair por baixo do
-                // cartão de saldo (topo direito).
-                if (_heat.demo && _heat.zones.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                        AppSpace.l, AppSpace.s, AppSpace.l, 0),
-                    child: const Align(
-                      alignment: Alignment.centerLeft,
-                      child: DemoHeatBadge(),
-                    ),
-                  ),
                 const Spacer(),
                 // --- avisos críticos (bloqueio/erro): flutuam acima do dock ---
                 if (p.lastErrorCode != null)
@@ -281,7 +268,7 @@ class _RoundGlassButton extends StatelessWidget {
 /// Estado da camada de demanda, mostrado fora do topo.
 ///
 /// Regra de honestidade: quando não há dado real, o app **diz que não há** —
-/// nunca inventa número. Dado de demonstração vem marcado como DEMO.
+/// nunca inventa número. Dado de demonstração vem marcado como simulado.
 class _HeatPill extends StatelessWidget {
   const _HeatPill({required this.zones, required this.demo});
 
@@ -297,7 +284,7 @@ class _HeatPill extends StatelessWidget {
     final label = empty
         ? 'Sem dados de demanda agora'
         : demo
-            ? 'DEMO · $zones zonas (simulado)'
+            ? '$zones zonas (simulado)'
             : '$zones zonas quentes';
     final icon = empty
         ? Icons.remove_circle_outline
@@ -309,7 +296,7 @@ class _HeatPill extends StatelessWidget {
       label: empty
           ? 'Sem dados de demanda no momento'
           : demo
-              ? 'Camada de demanda em modo demonstração: $zones zonas'
+              ? 'Dados de demanda simulados: $zones zonas'
               : '$zones zonas com demanda',
       child: Container(
         height: 34,

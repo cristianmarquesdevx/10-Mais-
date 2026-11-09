@@ -1,13 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../../main.dart';
 import '../api/client.dart';
 import '../location/location_service.dart';
+import '../map/route_map_view.dart';
 import '../theme/theme.dart';
 
 /// Navegação do parceiro: mapa em tela cheia com a rota por ruas e as
@@ -224,62 +224,20 @@ class _NavegacaoScreenState extends State<NavegacaoScreen> {
   Widget build(BuildContext context) {
     final from = _from;
     final to = _to;
-    final t = tokensOf(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Navegação')),
       body: from == null || to == null
           ? _estado(context)
           : Stack(
               children: [
-                FlutterMap(
-                  options: MapOptions(
-                    initialCenter: from,
-                    initialZoom: 15,
-                    interactionOptions: const InteractionOptions(
-                      flags: InteractiveFlag.pinchZoom |
-                          InteractiveFlag.drag |
-                          InteractiveFlag.doubleTapZoom,
-                    ),
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'app.dezemais.parceiro',
-                    ),
-                    if (_points.length > 1)
-                      PolylineLayer(polylines: [
-                        Polyline(
-                          points: _points,
-                          strokeWidth: 10,
-                          color: t.graphite,
-                        ),
-                        Polyline(
-                          points: _points,
-                          strokeWidth: 6,
-                          color: t.primary,
-                        ),
-                      ]),
-                    MarkerLayer(markers: [
-                      Marker(
-                        point: from,
-                        width: 34,
-                        height: 34,
-                        child: const _MotoDot(),
-                      ),
-                      Marker(
-                        point: to,
-                        width: 38,
-                        height: 38,
-                        alignment: Alignment.topCenter,
-                        child: Icon(Icons.place, size: 36, color: t.danger),
-                      ),
-                    ]),
-                    const SimpleAttributionWidget(
-                      source: Text('OpenStreetMap contributors'),
-                      alignment: Alignment.bottomRight,
-                    ),
-                  ],
+                // Mesmo mapa vetorial do resto do app (Console Noturno):
+                // o traçado é o que o parceiro segue, então ele fica acima
+                // do calor e abaixo dos rótulos da rua.
+                RouteMapView(
+                  points: _points,
+                  driver: from,
+                  destination: to,
+                  padding: 48,
                 ),
                 SafeArea(
                   child: Column(
@@ -443,27 +401,4 @@ class _Step {
   final String text;
   final IconData icon;
   final double meters;
-}
-
-class _MotoDot extends StatelessWidget {
-  const _MotoDot();
-
-  @override
-  Widget build(BuildContext context) {
-    final t = tokensOf(context);
-    return Container(
-      decoration: BoxDecoration(
-        color: t.primary,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 3),
-        boxShadow: [
-          BoxShadow(
-              color: t.primary.withValues(alpha: 0.45),
-              blurRadius: 10,
-              offset: const Offset(0, 2)),
-        ],
-      ),
-      child: const Icon(Icons.two_wheeler, size: 18, color: Colors.white),
-    );
-  }
 }

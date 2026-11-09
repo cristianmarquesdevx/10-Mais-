@@ -3,12 +3,15 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../api/client.dart';
+import '../map/map_layers.dart';
 import '../theme/theme.dart';
 
-/// Mapa do parceiro (ponto de troca do MapProvider — R1): tiles reais do
-/// OpenStreetMap (tiles padrão, escurecidos no cliente) com nomes reais de
-/// ruas/bairros, camada de calor por zona, marcador pulsante do parceiro e
-/// atribuição OSM obrigatória.
+/// Mapa **raster** do parceiro — tiles de imagem do OpenStreetMap.
+///
+/// É o **fallback** de [PartnerMap](../map/partner_map.dart): entra em cena
+/// quando o backend vetorial (MapLibre) não existe na plataforma ou quando o
+/// estilo falha. Mostra as mesmas zonas de demanda, com a mesma rampa de cor
+/// (`MapLayers.heatColor`) e o marcador com a mesma cor de status.
 ///
 /// A animação (pulso do marcador + calor) só roda quando há zonas —
 /// testes ficam livres de ticker infinito.
@@ -20,7 +23,6 @@ class HeatmapMap extends StatefulWidget {
     this.showLocation = true,
     this.showAttribution = true,
     this.online = true,
-    this.demo = false,
   });
 
   final List<HeatZone> zones;
@@ -33,11 +35,6 @@ class HeatmapMap extends StatefulWidget {
 
   /// Motorista online: marcador e pulso em teal; offline: cinza.
   final bool online;
-
-  /// Os números da camada são de demonstração (o servidor sinalizou).
-  /// O mapa ganha uma marca d'água — dado simulado nunca passa por real.
-  /// O selo legível fica fora do mapa: ver [DemoHeatBadge].
-  final bool demo;
 
   @override
   State<HeatmapMap> createState() => _HeatmapMapState();
@@ -133,9 +130,10 @@ class _HeatmapMapState extends State<HeatmapMap>
                         radius: 260 + 900 * z.weight,
                         useRadiusInMeter: true,
                         color: heatColor(z.weight).withValues(
-                            alpha:
-                                0.10 + 0.26 * z.weight * (0.8 + 0.2 * _ctrl.value)),
-                        borderColor: heatColor(z.weight).withValues(alpha: 0.45),
+                            alpha: 0.10 +
+                                0.26 * z.weight * (0.8 + 0.2 * _ctrl.value)),
+                        borderColor:
+                            heatColor(z.weight).withValues(alpha: 0.45),
                         borderStrokeWidth: 1,
                       ),
                   ],
@@ -174,115 +172,9 @@ class _HeatmapMapState extends State<HeatmapMap>
                 ),
             ],
           ),
-          // Honestidade do dado: se o servidor marcou a camada como
-          // demonstração, o mapa inteiro ganha a marca d'água. Dado simulado
-          // nunca passa por real. Sem zonas não há o que marcar.
-          if (widget.demo && widget.zones.isNotEmpty)
-            const _DemoWatermark(),
+          // O mapa não exibe marca d'água textual: a honestidade do dado
+          // fica no rótulo da camada, fora do desenho do mapa.
         ],
-      ),
-    );
-  }
-}
-
-/// Marca d'água da camada de demanda em modo demonstração.
-///
-/// Fica sobre o mapa (sem capturar toque) e é lida pelo leitor de tela: um
-/// motorista com daltonismo ou cego precisa saber que o número não é real.
-class _DemoWatermark extends StatelessWidget {
-  const _DemoWatermark();
-
-  @override
-  Widget build(BuildContext context) {
-    final t = tokensOf(context);
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return IgnorePointer(
-      child: Semantics(
-        label: 'Camada de demanda em modo demonstração: dados simulados',
-        child: ExcludeSemantics(
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // Grade de rótulos DEMO cruzando o mapa.
-              for (final p in const [
-                Alignment(-0.55, -0.55),
-                Alignment(0.25, -0.05),
-                Alignment(-0.25, 0.45),
-              ])
-                Align(
-                  alignment: p,
-                  child: Transform.rotate(
-                    angle: -0.45,
-                    child: Text(
-                      'DEMO',
-                      style: TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 3,
-                        color: t.ink.withValues(alpha: dark ? 0.16 : 0.14),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Selo "DEMO · dados simulados" da camada de demanda.
-///
-/// Fica **fora** do mapa: dentro dele, a posição era uma fração da altura e
-/// o selo caía por baixo do cartão de saldo (topo direito), ficando cortado.
-/// Quem usa o mapa coloca o selo no fluxo da própria tela, logo abaixo da
-/// linha de controles — assim a sobreposição é impossível por construção.
-class DemoHeatBadge extends StatelessWidget {
-  const DemoHeatBadge({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = tokensOf(context);
-    return Semantics(
-      label: 'Camada de demanda em modo demonstração: dados simulados',
-      child: ExcludeSemantics(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: t.surface.withValues(alpha: 0.94),
-            borderRadius: BorderRadius.circular(AppSpace.radiusChip),
-            border: Border.all(
-              color: t.warning.withValues(alpha: 0.55),
-              width: 1.5,
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpace.m,
-              vertical: AppSpace.xs,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.science_outlined, size: 14, color: t.warning),
-                const SizedBox(width: AppSpace.xs),
-                Flexible(
-                  child: Text(
-                    'DEMO · dados simulados',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: t.ink,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -393,13 +285,7 @@ class _PulsePainter extends CustomPainter {
 ///
 /// Substitui a rampa HSV arco-íris, que era magenta/verde-lima e brigava
 /// com o teal da marca.
-Color heatColor(double w) {
-  const low = Color(0xFF5CCFC3);
-  const mid = Color(0xFFFFB84D);
-  const high = Color(0xFFFF6B5A);
-  final x = w.clamp(0, 1).toDouble();
-  if (x < 0.5) {
-    return Color.lerp(low, mid, x / 0.5)!;
-  }
-  return Color.lerp(mid, high, (x - 0.5) / 0.5)!;
-}
+///
+/// A rampa mora em [MapLayers] — é a **mesma** que o mapa vetorial usa, para
+/// que os dois backends mostrem exatamente a mesma informação.
+Color heatColor(double w) => MapLayers.heatColor(w);
