@@ -220,6 +220,11 @@ BEGIN
   v_pricing := (v_quote->'pricing')
              || jsonb_build_object('fare_total', (v_quote->>'fare_total')::numeric,
                                    'quoted_at', now())
+             -- Trilha de auditoria: qual cotação foi cobrada. A linha da
+             -- cotação é consumida (DELETE) no uso — sem isto não sobraria
+             -- prova de que o preço veio do valor GRAVADO e não do cliente.
+             || jsonb_strip_nulls(jsonb_build_object(
+                   'quote_id', v_quote->>'quote_id'))
              || CASE WHEN p_client_quoted IS NOT NULL
                      THEN jsonb_build_object('client_quoted', p_client_quoted)
                      ELSE '{}'::jsonb END;

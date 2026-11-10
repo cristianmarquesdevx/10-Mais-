@@ -17,6 +17,7 @@
 //      (supabase/functions/psp-webhook), que é server-to-server e assinado.
 //
 // Rotas (as mesmas do contrato docs/fase2/openapi.yaml):
+//   GET    /me                                  (quem é o chamador)
 //   GET    /quote
 //   POST   /rides                     (Idempotency-Key opcional)
 //   GET    /rides?active=1
@@ -236,6 +237,15 @@ Deno.serve(async (req) => {
     }
   }
 
+  // ---- quem é o chamador --------------------------------------------------
+  //
+  // A identidade vem do token (auth.uid() no Postgres), nunca do corpo: o
+  // passageiro e o parceiro veem o SEU perfil, não o de um usuário fixo.
+  if (req.method === "GET" && path === "/me") {
+    const r = await rpc(caller, "api_me", {});
+    return r.ok ? json(200, r.data) : r.response;
+  }
+
   // ---- cotação ------------------------------------------------------------
   if (req.method === "GET" && path === "/quote") {
     const origin = point(num(q.get("origin_lat")), num(q.get("origin_lon")));
@@ -355,10 +365,16 @@ Deno.serve(async (req) => {
       // (supabase/functions/psp-webhook).
       const pay = await rpc(caller, "api_payment_get_by_ride", { p_ride: rideId });
       if (!pay.ok) return pay.response;
+      // A resposta é a CORRIDA (o mesmo formato de GET /rides/{id}), com o
+      // estado do pagamento em cima. O app lê `payment_status` do recibo e
+      // decide se avança; devolver só o pagamento quebraria o contrato que a
+      // tela já consome (a demo devolvia a corrida inteira).
+      const ride = await rpc(caller, "api_ride_get", { p_ride: rideId });
+      if (!ride.ok) return ride.response;
       return json(200, {
-        ride_id: rideId,
+        ...(ride.data as Record<string, unknown>),
         payment_id: pay.data?.payment_id ?? null,
-        status: pay.data?.status ?? null,
+        payment_method: pay.data?.method ?? null,
         payment_status: pay.data?.ride_payment_status ?? "NOT_DUE",
         confirmed_by: "psp_webhook",
       });
