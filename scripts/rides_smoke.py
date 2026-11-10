@@ -308,14 +308,21 @@ def main() -> int:
                       {"x-psp-secret": "segredo-errado"})
     expect(code == 401, f"webhook com segredo errado recusado (veio {code})")
 
+    # O `psp_payment_id` é o identificador do PSP e tem de ser ÚNICO por
+    # cobrança (`uq_payments_psp`): um id fixo ("psp") faz a segunda execução
+    # do smoke colidir com a primeira e falhar com 409 — o teste precisa ser
+    # re-executável.
+    psp_id = f"psp-{payment_id}"
     code, body = call("POST", f"{psp}", None,
-                      {"event": "payment.confirmed", "payment_id": payment_id},
+                      {"event": "payment.confirmed", "payment_id": payment_id,
+                       "psp_payment_id": psp_id},
                       {"x-psp-secret": args.psp_secret})
     expect(code == 200 and body.get("code") == "confirmed",
            f"webhook assinado confirma (veio {code} {body})")
 
     code, body = call("POST", f"{psp}", None,
-                      {"event": "payment.confirmed", "payment_id": payment_id},
+                      {"event": "payment.confirmed", "payment_id": payment_id,
+                       "psp_payment_id": psp_id},
                       {"x-psp-secret": args.psp_secret})
     expect(code == 200, f"reentrega do webhook é idempotente (veio {code})")
 

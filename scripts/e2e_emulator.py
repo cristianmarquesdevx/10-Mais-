@@ -13,11 +13,26 @@ e conduz o fluxo real pela interface (uiautomator + adb):
       → avalia com 5 estrelas
       → API termina com FINALIZADA/CONFIRMED
 
+Dois backends, o mesmo roteiro:
+
+    --backend demo (padrão)
+        API de demonstração (scripts/demo_api.py), login de 4 dígitos, o
+        estado final é lido da própria API de demo.
+
+    --backend real
+        Stack Supabase local: GoTrue (login com OTP de 6 dígitos lido da
+        caixa de entrada) + Postgres (cotação congelada, despacho, fases do
+        ciclo) + PSP simulado (o webhook assinado é a ÚNICA porta que
+        confirma dinheiro). O estado final é conferido na API real e no
+        Postgres (ledger). O que ainda não migrou (radar do passageiro,
+        geocoding, perfil) continua na API de demo.
+
 Uso (na raiz do repositório):
 
     python scripts/e2e_emulator.py                    # sobe o AVD sozinho
     python scripts/e2e_emulator.py --skip-build --skip-install
     python scripts/e2e_emulator.py --serial emulator-5554 --no-emulator
+    python scripts/e2e_emulator.py --backend real --payment pix
 
 Requisitos: Flutter, Android SDK/platform-tools e a porta da API livre (padrão
 8790). Se nenhum dispositivo estiver conectado, o script sobe o único AVD
@@ -26,6 +41,10 @@ dispositivo já conectado, `--headless` sobe o AVD sem janela (CI),
 `--keep-emulator` deixa o AVD ligado. A API
 usa estado em memória; cada execução começa do zero. O script NÃO mata
 processos de outras portas.
+
+No modo `--backend real` o stack local precisa estar no ar (`supabase start`),
+com o segredo do PSP e o do JWT disponíveis em `PSP_WEBHOOK_SECRET` e
+`SUPABASE_JWT_SECRET` (o padrão local do repositório já vem preenchido).
 
 Cada execução grava `.preview/e2e_auto/<timestamp>-a<N>/` com screenshots, o
 log da API, `logcat.txt`/`device.json` (em falha) e `result.json` (pass/fail,
@@ -50,6 +69,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -66,6 +86,23 @@ MONEY_RE = re.compile(r"^R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})$")
 # Sem --avd: usa o único AVD instalado (e falha listando os candidatos se houver
 # mais de um), para o teste não depender do nome do AVD de cada máquina.
 EMULATOR_PORT = 5554
+
+# --- stack local (modo `--backend real`) ------------------------------------
+# Os defaults são os do `supabase start` deste repositório: o kong em 54321, o
+# Postgres (container) em 54322 e a caixa de entrada do GoTrue em 54324.
+DEFAULT_STACK_BASE = "http://127.0.0.1:54321"
+DEFAULT_MAIL_BASE = "http://127.0.0.1:54324/api/v1"
+DEFAULT_RIDES_BASE = "http://10.0.2.2:54321/functions/v1/rides"
+DEFAULT_AUTH_BASE = "http://10.0.2.2:54321/auth/v1"
+DEFAULT_ANON_KEY = "sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH"
+DEFAULT_PSP_SECRET = "dev-local-2f8a1c4e6b9d3f70"
+DEFAULT_JWT_SECRET = "super-secret-jwt-token-with-at-least-32-characters-long"
+DEFAULT_DB_CONTAINER = "supabase_db_10_"
+# Contas semeadas no stack local (supabase/seed.sql).
+DEV_PASSAGEIRO = "11111111-1111-4111-8111-111111111111"
+DEV_PARCEIRO = "22222222-2222-4222-8222-222222222222"
+LOGIN_PASSAGEIRO = "passageiro@dezemais.local"
+LOGIN_PARCEIRO = "parceiro@dezemais.local"
 
 
 class E2EFailure(RuntimeError):
@@ -729,6 +766,450 @@ def wait_api(base: str, path: str, timeout: float = 15.0) -> dict:
     raise E2EFailure(f"API não respondeu em {path}: {last}")
 
 
+# ---------------------------------------------------------------------------
+# Backend real (stack Supabase local)
+# ---------------------------------------------------------------------------
+class RealBackend:
+    """GoTrue (acesso) + Postgres (ciclo da corrida) + PSP (dinheiro).
+
+    O app entra pelas mesmas portas do piloto:
+
+      - `AUTH_BASE` → GoTrue (OTP de 6 dígitos, chega por e-mail);
+      - `RIDES_BASE` → Edge Function `rides` (Postgres: cotação congelada,
+        despacho, fases, avaliação);
+      - o que ainda não migrou (radar do passageiro, geocoding, perfil, KYC,
+        carteira) → API de demonstração, como no build de piloto.
+
+    O dinheiro tem UM caminho só: o webhook assinado do PSP. O harness faz o
+    papel do PSP (`--payment pix`) — o app nunca confirma pagamento sozinho.
+    """
+
+    name = "real"
+
+    def __init__(
+        self,
+        *,
+        device_api_base: str,
+        stack_base: str = DEFAULT_STACK_BASE,
+        device_rides_base: str = DEFAULT_RIDES_BASE,
+        device_auth_base: str = DEFAULT_AUTH_BASE,
+        anon_key: str = DEFAULT_ANON_KEY,
+        mail_base: str = DEFAULT_MAIL_BASE,
+        psp_secret: str = DEFAULT_PSP_SECRET,
+        jwt_secret: str = DEFAULT_JWT_SECRET,
+        db_container: str = DEFAULT_DB_CONTAINER,
+        payment: str = "pix",
+    ) -> None:
+        self.device_api_base = device_api_base
+        self.stack_base = stack_base.rstrip("/")
+        self.device_rides_base = device_rides_base
+        self.device_auth_base = device_auth_base
+        self.anon_key = anon_key
+        self.mail_base = mail_base.rstrip("/")
+        self.psp_secret = psp_secret
+        self.jwt_secret = jwt_secret
+        self.db_container = db_container
+        self.payment = payment
+
+    # --- build ------------------------------------------------------------
+    def dart_defines(self) -> list[str]:
+        return [
+            f"API_BASE={self.device_api_base}",
+            f"RIDES_BASE={self.device_rides_base}",
+            f"AUTH_BASE={self.device_auth_base}",
+            f"AUTH_ANON_KEY={self.anon_key}",
+        ]
+
+    # --- prontidão --------------------------------------------------------
+    def wait_ready(self, timeout: float = 30.0) -> None:
+        """Confere que as três portas do stack respondem antes do build.
+
+        Sem isso o E2E falha tarde (no login) com um erro que parece do app.
+        """
+        deadline = time.time() + timeout
+        last = ""
+        while time.time() < deadline:
+            try:
+                req = urllib.request.Request(
+                    f"{self.stack_base}/auth/v1/health", method="GET")
+                req.add_header("apikey", self.anon_key)
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    if resp.status == 200:
+                        urllib.request.urlopen(
+                            f"{self.mail_base}/messages?folder=INBOX", timeout=5
+                        ).read()
+                        return
+            except Exception as exc:
+                last = str(exc)
+            time.sleep(1.0)
+        raise E2EFailure(
+            f"stack local não respondeu (GoTrue/Auth em {self.stack_base}/auth/v1, "
+            f"caixa em {self.mail_base}): {last}. Suba com `supabase start`."
+        )
+
+    # --- login ------------------------------------------------------------
+    def login(self, ui: Ui, package: str, done_text: str, email: str) -> None:
+        """Login de verdade: e-mail → código de 6 dígitos conferido no GoTrue."""
+        print(f"  login {package} (GoTrue: {email})")
+        ui.adb.launch(package)
+        ui.wait_text("Entrar ou criar conta", timeout=30)
+        ui.tap("CONTINUAR", exact=True)
+        ui.fill_field("69999999999", label="celular")
+        ui.tap("CONTINUAR", exact=True)
+
+        # Etapa de e-mail: o piloto não tem provedor de SMS, então o código vem
+        # por e-mail (e o telefone é registrado depois do login).
+        ui.wait_text("E-mail", exact=True, timeout=20)
+        ui.tap_edit()
+        ui.clear_focused_text()
+        ui.type_text(email)
+        ui.hide_keyboard()
+        ui.tap("CONTINUAR", exact=True)
+
+        ui.wait_text("Código de verificação", timeout=45)
+        code = self.otp(email, timeout=90)
+        print(f"    OTP de {email}: {code}")
+        ui.fill_field(code, label="código OTP")
+        ui.tap_and_wait("ENTRAR", done_text, timeout=60)
+
+    def otp(self, email: str, timeout: float = 90.0) -> str:
+        """Lê o código de 6 dígitos na caixa de entrada do GoTrue (Inbucket)."""
+        deadline = time.time() + timeout
+        last = "sem mensagem"
+        while time.time() < deadline:
+            try:
+                listing = json.load(urllib.request.urlopen(
+                    f"{self.mail_base}/messages?folder=INBOX", timeout=10))
+            except Exception as exc:
+                last = str(exc)
+                time.sleep(1.5)
+                continue
+            messages = [
+                m for m in listing.get("messages", [])
+                if any((t.get("Address") or "").lower() == email.lower()
+                       for t in (m.get("To") or []))
+            ]
+            messages.sort(key=lambda m: m.get("Created") or "", reverse=True)
+            for message in messages:
+                try:
+                    full = json.load(urllib.request.urlopen(
+                        f"{self.mail_base}/message/{message['ID']}", timeout=10))
+                except Exception:
+                    continue
+                body = f"{full.get('Text') or ''}\n{full.get('HTML') or ''}"
+                codes = list(dict.fromkeys(
+                    re.findall(r"(?<!\d)(\d{6})(?!\d)", body)))
+                if not codes:
+                    continue
+                if len(codes) > 1:
+                    raise E2EFailure(
+                        f"caixa de {email} tem mais de um código: {codes}")
+                return codes[0]
+            time.sleep(1.5)
+        raise E2EFailure(
+            f"não chegou OTP para {email} em {timeout:.0f}s ({last})")
+
+    # --- API do ciclo (a mesma porta que o app usa) ------------------------
+    def token(self, role: str) -> str:
+        """JWT de desenvolvimento da conta semeada (para conferir o estado).
+
+        Não é o caminho do app (lá o token vem do login) — é o caminho do
+        VERIFICADOR: ler o estado final pela mesma API que o app usa.
+        """
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import dev_jwt  # noqa: E402  (import tardio: só no modo real)
+
+        now = int(time.time())
+        sub = DEV_PARCEIRO if role == "partner" else DEV_PASSAGEIRO
+        return dev_jwt.sign(
+            {
+                "sub": sub,
+                "role": "authenticated",
+                "aud": "authenticated",
+                "iss": "supabase",
+                "iat": now,
+                "exp": now + 3600,
+            },
+            self.jwt_secret,
+        )
+
+    def api(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        role: str = "passenger",
+        timeout: float = 20.0,
+    ) -> tuple[int, dict]:
+        url = f"{self.stack_base}/functions/v1/rides{path}"
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("authorization", "Bearer " + self.token(role))
+        req.add_header("apikey", self.anon_key)
+        req.add_header("content-type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                return resp.status, (json.loads(raw) if raw else {})
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8")
+            try:
+                return exc.code, json.loads(raw)
+            except Exception:
+                return exc.code, {"raw": raw}
+
+    # --- Postgres (a verdade do dinheiro) ---------------------------------
+    def psql(self, sql: str) -> list[str]:
+        out = subprocess.run(
+            [
+                "docker", "exec", self.db_container,
+                "psql", "-U", "postgres", "-d", "postgres", "-Atc", sql,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=40,
+        )
+        if out.returncode != 0:
+            raise E2EFailure(
+                f"psql no container {self.db_container} falhou: "
+                f"{out.stderr.strip()[:400]}")
+        return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+
+    def presence_status(self, partner_id: str = DEV_PARCEIRO) -> str:
+        rows = self.psql(
+            "SELECT online_status FROM partner_presence "
+            f"WHERE partner_user_id = '{partner_id}'")
+        return rows[0] if rows else "AUSENTE"
+
+    def payment_id(self, ride_id: str, method: str = "PIX") -> str:
+        rows = self.psql(
+            "SELECT id FROM payments WHERE ride_id = "
+            f"'{ride_id}' AND method = '{method}' ORDER BY created_at DESC LIMIT 1")
+        return rows[0] if rows else ""
+
+    def ride_audit(self, ride_id: str) -> dict:
+        """Lê a corrida direto no Postgres (o que o servidor gravou)."""
+        rows = self.psql(
+            "SELECT status || '|' || COALESCE(payment_status,'') || '|' || "
+            "COALESCE(fare_total::text,'') || '|' || "
+            "COALESCE(pricing->>'quote_id','') || '|' || "
+            "COALESCE(pricing->>'quoted_at','') "
+            f"FROM rides WHERE id = '{ride_id}'")
+        if not rows:
+            raise E2EFailure(f"corrida {ride_id} não está no Postgres")
+        status, payment, fare, quote_id, quoted_at = rows[0].split("|")
+        return {
+            "status": status,
+            "payment_status": payment,
+            "fare_total": float(fare) if fare else None,
+            "quote_id": quote_id,
+            "quoted_at": quoted_at,
+        }
+
+    # --- PSP (o dinheiro) -------------------------------------------------
+    def psp_confirm(self, payment_id: str, ride_id: str) -> dict:
+        """O PSP simulado confirma: webhook assinado, server-to-server.
+
+        É a ÚNICA porta que confirma dinheiro — o app só pergunta o estado.
+        """
+        body = {
+            "event": "payment.confirmed",
+            "payment_id": payment_id,
+            "psp_payment_id": f"e2e-{ride_id}",
+        }
+        req = urllib.request.Request(
+            f"{self.stack_base}/functions/v1/psp-webhook",
+            data=json.dumps(body).encode(),
+            method="POST",
+        )
+        req.add_header("x-psp-secret", self.psp_secret)
+        req.add_header("content-type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise E2EFailure(
+                f"webhook do PSP recusado ({exc.code}): {exc.read().decode()[:300]}"
+            ) from exc
+        if payload.get("code") != "confirmed":
+            raise E2EFailure(f"webhook do PSP não confirmou: {payload}")
+        return payload
+
+    # --- o que o E2E precisa observar -------------------------------------
+    def wait_presence(self, timeout: float = 30.0) -> str:
+        """Espera o parceiro aparecer ONLINE no Postgres (despacho real)."""
+        deadline = time.time() + timeout
+        status = ""
+        while time.time() < deadline:
+            status = self.presence_status()
+            if status in ("ONLINE_DISPONIVEL", "OFERTA_PENDENTE"):
+                return status
+            time.sleep(1.5)
+        raise E2EFailure(
+            f"parceiro não ficou ONLINE no Postgres (status: {status or 'AUSENTE'})"
+        )
+
+    def assert_ride(self, shown: float | None = None) -> dict:
+        print("  backend real: conferindo o estado final")
+        status, payload = self.api("GET", "/rides")
+        if status != 200:
+            raise E2EFailure(f"GET /rides devolveu {status}: {payload}")
+        rides = payload.get("rides") or []
+        if not rides:
+            raise E2EFailure("GET /rides não devolveu a corrida do E2E")
+        ride_id = rides[0]["ride_id"]
+        status, detail = self.api("GET", f"/rides/{ride_id}")
+        if status != 200:
+            raise E2EFailure(f"GET /rides/{ride_id} devolveu {status}: {detail}")
+        audit = self.ride_audit(ride_id)
+        checks = {
+            "status FINALIZADA": detail.get("status") == "FINALIZADA",
+            "payment_status CONFIRMED": detail.get("payment_status") == "CONFIRMED",
+            "fare_total preenchido": isinstance(detail.get("fare_total"), (int, float)),
+            "parceiro real (não simulado)":
+                "simulado" not in str((detail.get("partner") or {}).get("name", "")),
+            # A cotação congelada: o servidor cobrou o valor GRAVADO na
+            # cotação (uso único, dentro da validade) — nunca o do cliente.
+            "cotação congelada gravada (quote_id)": bool(audit["quote_id"]),
+            "mesma corrida na API e no Postgres":
+                audit["status"] == detail.get("status"),
+        }
+        if shown is not None:
+            checks["preço cobrado = preço mostrado na tela"] = (
+                isinstance(detail.get("fare_total"), (int, float))
+                and abs(float(detail["fare_total"]) - shown) < 0.005
+            )
+            checks["preço do Postgres = preço da API"] = (
+                audit["fare_total"] is not None
+                and abs(audit["fare_total"] - float(detail["fare_total"])) < 0.005
+            )
+        failed = [name for name, ok in checks.items() if not ok]
+        if failed:
+            raise E2EFailure(
+                "estado final inesperado: " + ", ".join(failed)
+                + f"\n{json.dumps(detail, ensure_ascii=False, indent=2)}"
+                + f"\nauditoria: {audit}"
+            )
+        # A UI acabou de avaliar. Reenviar deve dar 409 already_rated; se der
+        # 201, a avaliação não chegou ao servidor.
+        status, body = self.api("POST", f"/rides/{ride_id}/rating", {"stars": 5})
+        if status != 409 or body.get("code") != "already_rated":
+            raise E2EFailure(
+                f"avaliação não persistiu: segundo POST devolveu {status} {body}"
+            )
+        # O dinheiro: a partida dobrada do ledger tem de fechar em zero.
+        total = self.psql(
+            "SELECT COALESCE(SUM(CASE WHEN direction = 'C' THEN amount "
+            "ELSE -amount END), 0)::numeric(12,2) FROM ledger_entries")
+        if not total or abs(float(total[0])) > 0.005:
+            raise E2EFailure(f"ledger do Postgres não fecha em zero (Σ={total})")
+        print(
+            f"    ok  {ride_id} FINALIZADA · CONFIRMED · "
+            f"R$ {detail['fare_total']:.2f} · avaliada"
+            + (f" · cotação {audit['quote_id'][:8]}" if audit["quote_id"] else "")
+            + f" · ledger Σ {total[0]}"
+        )
+        detail = dict(detail)
+        detail["quote_id"] = audit["quote_id"]
+        return detail
+
+
+class DemoBackend:
+    """Backend de demonstração (scripts/demo_api.py) — o E2E de sempre."""
+
+    name = "demo"
+
+    def __init__(self, *, base: str, device_api_base: str) -> None:
+        self.base = base.rstrip("/")
+        self.device_api_base = device_api_base
+        self.payment = "cash"
+
+    def dart_defines(self) -> list[str]:
+        # Sem RIDES_BASE/AUTH_BASE o app fica no modo demonstração: o ciclo de
+        # corrida na API de demo e o login de 4 dígitos (sem servidor).
+        return [f"API_BASE={self.device_api_base}"]
+
+    def wait_ready(self, timeout: float = 15.0) -> None:
+        # A API de demo sobe DENTRO da tentativa (start_api já espera ela
+        # responder) — aqui não há nada a checar antes do build.
+        return None
+
+    def login(self, ui: Ui, package: str, done_text: str, email: str) -> None:
+        print(f"  login {package} (demo)")
+        ui.adb.launch(package)
+        ui.wait_text("Entrar ou criar conta", timeout=30)
+        ui.tap("CONTINUAR", exact=True)
+        ui.fill_field("69999999999", label="celular")
+        ui.tap("CONTINUAR", exact=True)
+
+        # M6: entre o celular e o OTP existe a etapa de e-mail. O `find`
+        # curto distingue os dois fluxos sem duplicar o roteiro.
+        if ui.find("E-mail", exact=True, timeout=8) is not None:
+            ui.tap_edit()
+            ui.clear_focused_text()
+            ui.type_text("e2e@dezemais.app")
+            ui.hide_keyboard()
+            ui.tap("CONTINUAR", exact=True)
+
+        ui.wait_text("Código de verificação", timeout=60)
+        ui.fill_field("1234", label="código OTP")
+        ui.tap_and_wait("ENTRAR", done_text, timeout=60)
+
+    def assert_ride(self, shown: float | None = None) -> dict:
+        print("  API: conferindo o estado final")
+        active = api(self.base, "GET", "/rides?active=1")[1]
+        if active.get("rides"):
+            raise E2EFailure("ainda existe corrida ativa após finalizar/avaliar")
+        rides = api(self.base, "GET", "/rides")[1].get("rides", [])
+        if not rides:
+            raise E2EFailure("GET /rides não devolveu a corrida do E2E")
+        ride = rides[0]
+        ride_id = ride["ride_id"]
+        detail = api(self.base, "GET", f"/rides/{ride_id}")[1]
+        checks = {
+            "status FINALIZADA": detail.get("status") == "FINALIZADA",
+            # O schema Ride não expõe cash_declared; na demo CONFIRMED só existe
+            # quando o parceiro declarou o dinheiro (POST /rides/{id}/transition
+            # com cash_declared=true). A tela do passageiro viu o mesmo estado.
+            "payment_status CONFIRMED": detail.get("payment_status") == "CONFIRMED",
+            "fare_total preenchido": isinstance(detail.get("fare_total"), (int, float)),
+            "parceiro real (não simulado)":
+                "simulado" not in str((detail.get("partner") or {}).get("name", "")),
+            # O preço veio de uma COTAÇÃO CONGELADA no servidor: o app apresentou
+            # o quote_id e o servidor cobrou o valor gravado (nunca o do cliente).
+            "cotação congelada honrada (quote_id)": bool(detail.get("quote_id")),
+        }
+        if shown is not None:
+            checks["preço cobrado = preço mostrado na tela"] = (
+                isinstance(detail.get("fare_total"), (int, float))
+                and abs(float(detail["fare_total"]) - shown) < 0.005
+            )
+        failed = [name for name, ok in checks.items() if not ok]
+        if failed:
+            raise E2EFailure(
+                "estado final inesperado: " + ", ".join(failed)
+                + f"\n{json.dumps(detail, ensure_ascii=False, indent=2)}"
+            )
+        # A UI acabou de avaliar. Reenviar deve dar 409 already_rated; se der 201,
+        # a avaliação não chegou ao servidor (a tela teria voltado sem gravar).
+        status, body = api(
+            self.base, "POST", f"/rides/{ride_id}/rating", {"stars": 5}
+        )
+        if status != 409 or body.get("code") != "already_rated":
+            raise E2EFailure(
+                f"avaliação não persistiu: segundo POST devolveu {status} {body}"
+            )
+        print(
+            f"    ok  {ride_id} FINALIZADA · CONFIRMED · "
+            f"R$ {detail['fare_total']:.2f} · avaliada"
+            + (f" · cotação {detail.get('quote_id', '')[:8]}"
+               if detail.get("quote_id") else "")
+        )
+        return detail
+
+
 def capture_diagnostics(adb: Adb, artifacts: Path) -> None:
     """Logcat e identidade do dispositivo: o que o screenshot não mostra.
 
@@ -768,29 +1249,7 @@ def capture_diagnostics(adb: Adb, artifacts: Path) -> None:
         print(f"    aviso: device.json incompleto ({exc})", file=sys.stderr)
 
 
-def login(ui: Ui, package: str, done_text: str) -> None:
-    print(f"  login {package}")
-    ui.adb.launch(package)
-    ui.wait_text("Entrar ou criar conta", timeout=30)
-    ui.tap("CONTINUAR", exact=True)
-    ui.fill_field("69999999999", label="celular")
-    ui.tap("CONTINUAR", exact=True)
-
-    # M6 (só passageiro): entre o celular e o OTP existe a etapa de e-mail de
-    # recuperação. O parceiro não tem essa etapa; o `find` curto distingue os
-    # dois fluxos sem duplicar o roteiro.
-    if ui.find("E-mail", exact=True, timeout=8) is not None:
-        ui.tap_edit()
-        ui.clear_focused_text()
-        ui.type_text("e2e@dezemais.app")
-        ui.hide_keyboard()
-        ui.tap("CONTINUAR", exact=True)
-
-    ui.wait_text("Código de verificação", timeout=60)
-    ui.fill_field("1234", label="código OTP")
-    ui.tap_and_wait("ENTRAR", done_text, timeout=60)
-
-def ensure_online(ui: Ui) -> None:
+def ensure_online(ui: Ui, backend) -> None:
     print("  parceiro: ficar online")
     # O app não finge online: sem fix de GPS ele fica em OFFLINE e a tela diz
     # por quê. O AVD entrega o primeiro fix devagar, então cada tentativa
@@ -809,6 +1268,11 @@ def ensure_online(ui: Ui) -> None:
             time.sleep(5)
             continue
         ui.shot("01-parceiro-online")
+        # No backend real o despacho olha o Postgres: sem presença gravada
+        # não chega oferta, e a UI mentiria se dissesse que está online.
+        if isinstance(backend, RealBackend):
+            status = backend.wait_presence()
+            print(f"    presença no Postgres: {status}")
         return
 
 
@@ -850,12 +1314,15 @@ def request_ride(ui: Ui) -> float:
     return shown
 
 
-def accept_and_finish(ui: Ui) -> None:
+def accept_and_finish(ui: Ui, backend) -> None:
     print("  parceiro: oferta e corrida")
     ui.adb.launch(PARCEIRO)
     ui.wait_text("ACEITAR", exact=True, timeout=45)
-    ui.shot("04-parceiro-oferta")
+    # A oferta vive 15 s (janela do produto) e uma captura de tela neste
+    # emulador leva vários segundos: o toque vem ANTES da foto, senão a
+    # janela fecha antes do aceite ("Oferta perdida por tempo").
     ui.tap("ACEITAR", exact=True)
+    ui.shot("04-parceiro-aceite")
     ui.wait_text("A CAMINHO", exact=True, timeout=35)
     ui.shot("05-parceiro-em-corrida")
     ui.tap("A CAMINHO", exact=True)
@@ -866,73 +1333,68 @@ def accept_and_finish(ui: Ui) -> None:
     ui.wait_text("FINALIZAR", exact=True, timeout=30)
     ui.tap("FINALIZAR", exact=True)
     ui.wait_text("Confirmação de dinheiro", timeout=30)
-    ui.tap("CONFIRMEI O DINHEIRO", exact=True)
+    if backend.payment == "pix":
+        # Pagamento digital: o parceiro NÃO declara dinheiro em espécie — o
+        # split é do PSP, e a confirmação chega pelo webhook assinado.
+        ui.tap("Pagamento digital (sem declarar)", exact=True)
+    else:
+        ui.tap("CONFIRMEI O DINHEIRO", exact=True)
     ui.shot("06-parceiro-finalizado")
 
 
-def pay_and_rate(ui: Ui) -> None:
-    print("  passageiro: pagamento já confirmado + avaliação")
+def pay_and_rate(ui: Ui, backend) -> None:
+    print("  passageiro: pagamento e avaliação")
     ui.adb.launch(PASSAGEIRO)
-    ui.wait_text("Pagamento confirmado", timeout=35)
+    if backend.payment == "pix":
+        # O passageiro paga: o app cria a cobrança (PENDING) e mostra o botão
+        # "Já paguei". Quem confirma é o PSP — o harness faz esse papel.
+        ui.wait_text("Pagar com PIX", timeout=45)
+        ui.tap("Pagar com PIX", exact=True)
+        ui.wait_text("Já paguei", timeout=45)
+        ui.shot("07-passageiro-pix-pendente")
+        ride_id = _ride_id_from_psql(backend)
+        payment_id = backend.payment_id(ride_id)
+        if not payment_id:
+            raise E2EFailure(
+                f"nenhuma cobrança PIX criada para a corrida {ride_id}")
+        print(f"    cobrança {payment_id} pendente; PSP confirma")
+        backend.psp_confirm(payment_id, ride_id)
+        # O "Já paguei" só PERGUNTA ao servidor. Como o PSP acabou de
+        # confirmar, o app avança sozinho para a tela de avaliação (o título
+        # dela é "Avaliar a corrida") — nesse caminho não existe botão
+        # "Avaliar corrida". Se o poll já tiver atualizado a tela para o
+        # estado "pago", o botão "Avaliar corrida" é o que leva à mesma tela.
+        if ui.find("Já paguei", exact=True, timeout=3) is not None:
+            ui.tap("Já paguei", exact=True)
+        elif ui.find("Avaliar corrida", exact=True, timeout=3) is not None:
+            ui.tap("Avaliar corrida", exact=True)
+        else:
+            raise E2EFailure(
+                "nem 'Já paguei' nem 'Avaliar corrida' na tela de pagamento "
+                f"— rótulos: {ui.visible_summary(limit=12)}")
+        ui.wait_text("Avaliar a corrida", exact=True, timeout=60)
+    else:
+        # Dinheiro declarado pelo parceiro: a cobrança em espécie já foi
+        # confirmada no servidor e a tela de pagamento mostra "Pagamento
+        # confirmado" com o botão "Avaliar corrida".
+        ui.wait_text("Pagamento confirmado", timeout=45)
+        ui.tap("Avaliar corrida", exact=True, timeout=20)
+        ui.wait_text("Avaliar a corrida", exact=True, timeout=60)
     ui.shot("07-passageiro-pagamento")
-    ui.tap_and_wait("Avaliar corrida", "Avaliar a corrida", timeout=60)
     ui.tap("5 estrelas", timeout=15)
     ui.shot("08-passageiro-avaliacao")
     ui.tap_and_wait("Enviar avaliação", "Para onde?", timeout=60)
     ui.shot("09-passageiro-home-final")
 
 
-def assert_ride(base: str, shown: float | None = None) -> dict:
-    print("  API: conferindo o estado final")
-    active = api(base, "GET", "/rides?active=1")[1]
-    if active.get("rides"):
-        raise E2EFailure("ainda existe corrida ativa após finalizar/avaliar")
-    rides = api(base, "GET", "/rides")[1].get("rides", [])
-    if not rides:
-        raise E2EFailure("GET /rides não devolveu a corrida do E2E")
-    ride = rides[0]
-    ride_id = ride["ride_id"]
-    detail = api(base, "GET", f"/rides/{ride_id}")[1]
-    checks = {
-        "status FINALIZADA": detail.get("status") == "FINALIZADA",
-        # O schema Ride não expõe cash_declared; na demo CONFIRMED só existe
-        # quando o parceiro declarou o dinheiro (POST /rides/{id}/transition
-        # com cash_declared=true). A tela do passageiro viu o mesmo estado.
-        "payment_status CONFIRMED": detail.get("payment_status") == "CONFIRMED",
-        "fare_total preenchido": isinstance(detail.get("fare_total"), (int, float)),
-        "parceiro real (não simulado)":
-            "simulado" not in str((detail.get("partner") or {}).get("name", "")),
-        # O preço veio de uma COTAÇÃO CONGELADA no servidor: o app apresentou
-        # o quote_id e o servidor cobrou o valor gravado (nunca o do cliente).
-        "cotação congelada honrada (quote_id)": bool(detail.get("quote_id")),
-    }
-    if shown is not None:
-        checks["preço cobrado = preço mostrado na tela"] = (
-            isinstance(detail.get("fare_total"), (int, float))
-            and abs(float(detail["fare_total"]) - shown) < 0.005
-        )
-    failed = [name for name, ok in checks.items() if not ok]
-    if failed:
-        raise E2EFailure(
-            "estado final inesperado: " + ", ".join(failed)
-            + f"\n{json.dumps(detail, ensure_ascii=False, indent=2)}"
-        )
-    # A UI acabou de avaliar. Reenviar deve dar 409 already_rated; se der 201,
-    # a avaliação não chegou ao servidor (a tela teria voltado sem gravar).
-    status, body = api(
-        base, "POST", f"/rides/{ride_id}/rating", {"stars": 5}
-    )
-    if status != 409 or body.get("code") != "already_rated":
-        raise E2EFailure(
-            f"avaliação não persistiu: segundo POST devolveu {status} {body}"
-        )
-    print(
-        f"    ok  {ride_id} FINALIZADA · CONFIRMED · "
-        f"R$ {detail['fare_total']:.2f} · avaliada"
-        + (f" · cotação {detail.get('quote_id', '')[:8]}"
-           if detail.get("quote_id") else "")
-    )
-    return detail
+def _ride_id_from_psql(backend) -> str:
+    """A corrida mais recente do passageiro (o Postgres é a fonte)."""
+    rows = backend.psql(
+        "SELECT id FROM rides WHERE passenger_user_id = "
+        f"'{DEV_PASSAGEIRO}' ORDER BY created_at DESC LIMIT 1")
+    if not rows:
+        raise E2EFailure("nenhuma corrida do passageiro no Postgres")
+    return rows[0]
 
 
 def stop_gradle_daemons() -> None:
@@ -967,6 +1429,20 @@ def stop_gradle_daemons() -> None:
 
 
 def start_api(port: int, artifacts: Path) -> tuple[subprocess.Popen, object]:
+    # Porta ocupada = armadilha: no Windows dois processos podem escutar a
+    # MESMA porta (SO_REUSEADDR) e o app passa a falar com um servidor VELHO
+    # (de outra sessão), que ainda tem a corrida ativa de antes — o E2E falha
+    # com "active_ride_exists" sem que nada do produto esteja quebrado.
+    # Por isso a porta é conferida ANTES de subir a API.
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            raise E2EFailure(
+                f"a porta {port} já está em uso por outro processo — "
+                f"encerrre-o ou rode com --port <outra>. "
+                f"(no Windows: Get-NetTCPConnection -LocalPort {port})"
+            )
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        pass  # porta livre: pode subir a API
     log_path = artifacts / "demo_api.log"
     log = open(log_path, "wb")
     env = os.environ.copy()
@@ -1017,6 +1493,33 @@ def main() -> int:
     parser.add_argument("--base", help="base HTTP vista pelo host")
     parser.add_argument("--device-api-base",
                         help="base vista pelo emulador (default: 10.0.2.2:<port>)")
+    parser.add_argument("--backend", choices=("demo", "real"), default="demo",
+                        help="demo = API de demonstração (default); real = stack "
+                             "Supabase local (GoTrue + Postgres + PSP)")
+    parser.add_argument("--payment", choices=("pix", "cash"), default="pix",
+                        help="no backend real: pix = o webhook assinado do PSP "
+                             "confirma (default); cash = o parceiro declara o "
+                             "dinheiro em espécie")
+    parser.add_argument("--stack-base", default=DEFAULT_STACK_BASE,
+                        help="base do stack local vista pelo host")
+    parser.add_argument("--rides-base", default=DEFAULT_RIDES_BASE,
+                        help="base da Edge Function 'rides' vista pelo emulador")
+    parser.add_argument("--auth-base", default=DEFAULT_AUTH_BASE,
+                        help="base do GoTrue vista pelo emulador")
+    parser.add_argument("--anon-key", default=DEFAULT_ANON_KEY,
+                        help="chave pública (apikey) do projeto Supabase")
+    parser.add_argument("--mail-base", default=DEFAULT_MAIL_BASE,
+                        help="API da caixa de entrada do GoTrue (Inbucket)")
+    parser.add_argument("--psp-secret",
+                        default=os.environ.get("PSP_WEBHOOK_SECRET",
+                                               DEFAULT_PSP_SECRET),
+                        help="segredo do webhook do PSP")
+    parser.add_argument("--jwt-secret",
+                        default=os.environ.get("SUPABASE_JWT_SECRET",
+                                               DEFAULT_JWT_SECRET),
+                        help="segredo do JWT (só para o verificador ler o estado)")
+    parser.add_argument("--db-container", default=DEFAULT_DB_CONTAINER,
+                        help="container do Postgres do stack local")
     parser.add_argument("--adb", help="caminho do adb")
     parser.add_argument("--emulator", help="caminho do emulator")
     parser.add_argument("--flutter", help="caminho do flutter")
@@ -1070,12 +1573,32 @@ def main() -> int:
             ],
         )
 
+    if args.backend == "real":
+        # O ciclo de corrida e o acesso vão para o stack real; o que ainda não
+        # migrou (radar do passageiro, geocoding, perfil) fica na API de demo,
+        # que sobe como no roteiro de sempre.
+        backend = RealBackend(
+            device_api_base=device_base,
+            stack_base=args.stack_base,
+            device_rides_base=args.rides_base,
+            device_auth_base=args.auth_base,
+            anon_key=args.anon_key,
+            mail_base=args.mail_base,
+            psp_secret=args.psp_secret,
+            jwt_secret=args.jwt_secret,
+            db_container=args.db_container,
+            payment=args.payment,
+        )
+    else:
+        backend = DemoBackend(base=base, device_api_base=device_base)
+
     tools = {
         "adb": adb_path,
         "emulator": emulator_path,
         "flutter": flutter_path,
         "base": base,
         "device_api_base": device_base,
+        "backend": backend,
     }
     stamp = time.strftime("%Y%m%d-%H%M%S")
     last_error = ""
@@ -1123,6 +1646,7 @@ def run_attempt(args, artifacts: Path, tools: dict, need_build: bool) -> dict:
     """Uma execução completa: AVD, API, APKs e fluxo. Devolve o resultado."""
     base = tools["base"]
     device_base = tools["device_api_base"]
+    backend = tools["backend"]
     adb = Adb(tools["adb"], args.serial)
     ui = Ui(adb, artifacts)
     emulator = (
@@ -1132,8 +1656,13 @@ def run_attempt(args, artifacts: Path, tools: dict, need_build: bool) -> dict:
     log = None
     started_emulator = False
     started_at = time.monotonic()
-    result: dict = {"status": "fail", "artifacts": str(artifacts)}
+    result: dict = {"status": "fail", "artifacts": str(artifacts),
+                    "backend": backend.name,
+                    "payment": backend.payment}
     try:
+        # O stack real tem de estar no ar antes do build: sem GoTrue o app
+        # entra em modo dev e o roteiro real não acontece.
+        backend.wait_ready()
         # Build **antes** de subir o AVD: o Gradle sobe daemon e heap de ~1 GB,
         # e somar isso ao emulador já em execução é o que estourava a memória
         # do host (12 GB) no meio do fluxo. Sem AVD ligado não há o que perder.
@@ -1149,7 +1678,9 @@ def run_attempt(args, artifacts: Path, tools: dict, need_build: bool) -> dict:
                 run(
                     flutter_cmd + [
                         "build", "apk", "--debug",
-                        f"--dart-define=API_BASE={device_base}",
+                    ] + [
+                        f"--dart-define={define}"
+                        for define in backend.dart_defines()
                     ],
                     cwd=ROOT / "app" / app,
                 )
@@ -1173,6 +1704,7 @@ def run_attempt(args, artifacts: Path, tools: dict, need_build: bool) -> dict:
         print(f"dispositivo: {serial}")
         tune_device(adb)
         print(f"API do teste: {base} (emulador: {device_base})")
+        print(f"backend: {result['backend']} · pagamento: {result['payment']}")
         print(f"artefatos: {artifacts}")
 
         if not args.skip_server:
@@ -1199,20 +1731,20 @@ def run_attempt(args, artifacts: Path, tools: dict, need_build: bool) -> dict:
             adb.grant(package, "android.permission.ACCESS_COARSE_LOCATION")
 
         print("\n== parceiro: login e ONLINE")
-        login(ui, PARCEIRO, "FICAR ONLINE")
-        ensure_online(ui)
+        backend.login(ui, PARCEIRO, "FICAR ONLINE", LOGIN_PARCEIRO)
+        ensure_online(ui, backend)
 
         print("\n== passageiro: login e pedido")
-        login(ui, PASSAGEIRO, "Para onde?")
+        backend.login(ui, PASSAGEIRO, "Para onde?", LOGIN_PASSAGEIRO)
         shown = request_ride(ui)
 
         print("\n== parceiro: aceite e transições")
-        accept_and_finish(ui)
+        accept_and_finish(ui, backend)
 
         print("\n== passageiro: pagamento e avaliação")
-        pay_and_rate(ui)
+        pay_and_rate(ui, backend)
 
-        detail = assert_ride(base, shown)
+        detail = backend.assert_ride(shown)
         result.update(
             status="pass",
             ride_id=detail["ride_id"],
@@ -1230,11 +1762,21 @@ def run_attempt(args, artifacts: Path, tools: dict, need_build: bool) -> dict:
         return result
     except Exception as exc:
         result["error"] = str(exc)
-        # Infra (emulador/adb morto) × produto (a tela ou o contrato mudou):
-        # só a primeira justifica nova rodada; a segunda é bug de verdade.
+        # Infra (emulador/adb/API mortos) × produto (a tela ou o contrato
+        # mudou): só a primeira justifica nova rodada; a segunda é bug de
+        # verdade.
         device_state = adb.state()
         result["device_state"] = device_state
-        result["failure_kind"] = "infra" if device_state != "device" else "produto"
+        kind = "infra" if device_state != "device" else "produto"
+        if kind == "produto":
+            # A API do teste parou de responder? O app só veria "offline" e o
+            # roteiro acusaria a tela — isso é infra, não produto.
+            try:
+                api(base, "GET", "/me", timeout=5)
+            except Exception:
+                kind = "infra"
+                result["error"] += " — a API do teste não responde mais"
+        result["failure_kind"] = kind
         print(f"\nFAIL ({result['failure_kind']}) — {exc}", file=sys.stderr)
         try:
             ui.shot("failure")
