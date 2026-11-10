@@ -90,6 +90,12 @@ EMULATOR_PORT = 5554
 # --- stack local (modo `--backend real`) ------------------------------------
 # Os defaults são os do `supabase start` deste repositório: o kong em 54321, o
 # Postgres (container) em 54322 e a caixa de entrada do GoTrue em 54324.
+#
+# Nenhum destes valores é segredo de produção: a chave `publishable` é
+# pública por desenho (ela vai dentro do app — quem protege os dados é o
+# RLS), o segredo do JWT é o padrão conhecido do stack local e o segredo do
+# PSP é o da máquina de desenvolvimento. Todos podem ser trocados por
+# ambiente/CLI — é assim que o mesmo harness roda contra um projeto real.
 DEFAULT_STACK_BASE = "http://127.0.0.1:54321"
 DEFAULT_MAIL_BASE = "http://127.0.0.1:54324/api/v1"
 DEFAULT_RIDES_BASE = "http://10.0.2.2:54321/functions/v1/rides"
@@ -1506,7 +1512,9 @@ def main() -> int:
                         help="base da Edge Function 'rides' vista pelo emulador")
     parser.add_argument("--auth-base", default=DEFAULT_AUTH_BASE,
                         help="base do GoTrue vista pelo emulador")
-    parser.add_argument("--anon-key", default=DEFAULT_ANON_KEY,
+    parser.add_argument("--anon-key",
+                        default=os.environ.get("AUTH_ANON_KEY",
+                                               DEFAULT_ANON_KEY),
                         help="chave pública (apikey) do projeto Supabase")
     parser.add_argument("--mail-base", default=DEFAULT_MAIL_BASE,
                         help="API da caixa de entrada do GoTrue (Inbucket)")
