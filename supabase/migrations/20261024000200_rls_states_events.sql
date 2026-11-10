@@ -33,9 +33,12 @@ GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
 DO $stubcheck$
 BEGIN
   IF to_regprocedure('auth.uid()') IS NULL THEN
-    CREATE SCHEMA auth;
+    -- IF NOT EXISTS: o schema `auth` pode já existir (GoTrue num stack real, ou
+    -- o stub do CI) sem a função — aí o schema é reaproveitado e só a função
+    -- falta. Sem o IF NOT EXISTS, a cadeia morria com "schema already exists".
+    CREATE SCHEMA IF NOT EXISTS auth;
     -- local test only: psql -c "SET app.test_uid = '<uuid>'"
-    CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS
+    CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS
       $fn$ SELECT nullif(current_setting('app.test_uid', true), '')::uuid $fn$;
   END IF;
 END $stubcheck$;

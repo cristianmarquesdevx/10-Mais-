@@ -3,6 +3,10 @@ name: db-suite
 # Cadeia SQL da Fase 2 (0001→0005) a cada push/PR: container PostGIS limpo,
 # ON_ERROR_STOP em toda a cadeia, E2E dos 2 modos com ledger Σ=0 e suíte
 # adversarial (18/18 asserts). Ver scripts/ci_db_suite.sh.
+#
+# A segunda etapa aplica a CADEIA DE DEPLOY (supabase/migrations/*.sql) do zero
+# e confere as assinaturas das RPCs que as Edge Functions chamam — é a cadeia
+# que o `supabase db push` executa. Ver scripts/ci_migrations.sh.
 on:
   push:
   pull_request:
@@ -15,6 +19,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Cadeia SQL 0001→0005 (container + asserts)
         run: bash scripts/ci_db_suite.sh
+      - name: Cadeia de deploy (supabase/migrations, do zero)
+        run: bash scripts/ci_migrations.sh
       - name: Simulador de despacho (regressão do modelo de custo)
         run: python3 scripts/dispatch_sim.py --rides 5000 --seed 42
 
