@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:ten_map/ten_map.dart';
 
 import '../theme/theme.dart';
@@ -44,164 +42,24 @@ class _CityMapState extends State<CityMap> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
     final me = _me;
 
-    if (supportsVectorMap) {
-      return _VectorCityMap(center: me, dark: dark, animation: _ctrl);
-    }
-
-    return ColoredBox(
-      color: dark ? AppColors.graphiteDeep : AppColors.background,
-      child: FlutterMap(
-        options: MapOptions(
-          initialCenter: me,
-          initialZoom: 14.2,
-          interactionOptions: const InteractionOptions(
-            flags: InteractiveFlag.pinchZoom |
-                InteractiveFlag.drag |
-                InteractiveFlag.doubleTapZoom,
-          ),
+    // O mapa compartilhado escolhe o backend (vetorial no Android/iOS, raster
+    // no fallback) e posiciona o marcador pela projeção da câmera — o pulso
+    // continua sendo um widget Flutter, igual nos dois backends.
+    return BaseMapView(
+      center: me,
+      zoom: 14.2,
+      userAgentPackageName: 'app.dezemais.passageiro',
+      markers: [
+        MapMarker(
+          point: me,
+          width: 64,
+          height: 64,
+          child: _PulsingMe(animation: _ctrl, color: AppColors.primary),
         ),
-        children: [
-          // OSM padrão (ruas e nomes reais) sem chave de API.
-          TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'app.dezemais.passageiro',
-            tileBuilder: dark ? darkModeTileBuilder : null,
-          ),
-          MarkerLayer(markers: [
-            Marker(
-              point: me,
-              width: 64,
-              height: 64,
-              child: _PulsingMe(animation: _ctrl, color: AppColors.primary),
-            ),
-          ]),
-          const SimpleAttributionWidget(
-            source: Text('© OpenStreetMap contributors'),
-            alignment: Alignment.bottomRight,
-          ),
-        ],
-      ),
+      ],
     );
-  }
-}
-
-/// Mapa vetorial do passageiro: mesma base do motorista, sem camada de calor.
-class _VectorCityMap extends StatefulWidget {
-  const _VectorCityMap({
-    required this.center,
-    required this.dark,
-    required this.animation,
-  });
-
-  final LatLng center;
-  final bool dark;
-  final Animation<double> animation;
-
-  @override
-  State<_VectorCityMap> createState() => _VectorCityMapState();
-}
-
-class _VectorCityMapState extends State<_VectorCityMap> {
-  ml.MapLibreMapController? _controller;
-
-  /// Onde o ponto "você" caiu na tela, em px lógicos. `null` até o mapa
-  /// informar a câmera (antes disso o centro do widget já é a posição certa).
-  Offset? _dot;
-
-  /// Descarta respostas fora de ordem quando a câmera se move rápido.
-  int _syncToken = 0;
-
-  @override
-  Widget build(BuildContext context) {
-    final center = ml.LatLng(
-      widget.center.latitude,
-      widget.center.longitude,
-    );
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // O mapa é arrastável: o marcador não pode ficar preso no centro da
-        // tela (o raster desenhava o marcador na coordenada, então o arrasto
-        // o levava junto). Aqui a coordenada é projetada depois de cada
-        // movimento da câmera.
-        final dot = _dot ?? constraints.biggest.center(Offset.zero);
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            ml.MapLibreMap(
-              styleString:
-                  MapStyles.consoleNoturnoStyleJson(dark: widget.dark),
-              initialCameraPosition: ml.CameraPosition(
-                target: center,
-                zoom: 14.2,
-              ),
-              compassEnabled: false,
-              logoEnabled: false,
-              attributionEnabled: false,
-              rotateGesturesEnabled: false,
-              onMapCreated: (c) {
-                _controller = c;
-                // Depois do primeiro frame o mapa já tem viewport: só então
-                // `toScreenLocation` responde.
-                WidgetsBinding.instance
-                    .addPostFrameCallback((_) => _syncDot());
-              },
-              onCameraIdle: _syncDot,
-            ),
-            // O marcador do passageiro continua em Flutter para manter o pulso
-            // (e o mesmo desenho nos dois backends).
-            Positioned(
-              left: dot.dx - 32,
-              top: dot.dy - 32,
-              width: 64,
-              height: 64,
-              child: IgnorePointer(
-                child: _PulsingMe(
-                  animation: widget.animation,
-                  color: AppColors.primary,
-                ),
-              ),
-            ),
-            Positioned(
-              right: 8,
-              bottom: 6,
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: const Color(0x990B1220),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                    child: Text(
-                      '© OpenStreetMap · OpenFreeMap',
-                      style: TextStyle(fontSize: 9, color: Colors.white70),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _syncDot() async {
-    final c = _controller;
-    if (c == null) return;
-    final token = ++_syncToken;
-    try {
-      final p = await c.toScreenLocation(
-        ml.LatLng(widget.center.latitude, widget.center.longitude),
-      );
-      if (!mounted || token != _syncToken) return;
-      setState(() => _dot = Offset(p.x.toDouble(), p.y.toDouble()));
-    } catch (_) {
-      // Estilo/câmera ainda carregando: o próximo `onCameraIdle` corrige.
-    }
   }
 }
 

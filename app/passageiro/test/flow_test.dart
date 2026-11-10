@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart' show LocationAccuracy;
 import 'package:http/http.dart' as http;
@@ -15,6 +14,7 @@ import 'package:passageiro/src/widgets/driver_radar.dart';
 import 'package:passageiro/src/widgets/radar_hud.dart';
 import 'package:passageiro/src/state/ride_controller.dart';
 import 'package:passageiro/src/theme/theme.dart';
+import 'package:ten_map/ten_map.dart';
 
 /// Fluxo mínimo C1 → C2 (solicitar em ≤ 3 toques) contra o contrato:
 /// a tela monta o POST /rides com o corpo esperado pelo servidor.
@@ -656,12 +656,15 @@ void main() {
 
     expect(find.text('2 motoristas na região'), findsOneWidget);
     expect(find.text('Radar indisponível'), findsNothing);
-    expect(find.byType(DriverRadarLayer), findsOneWidget);
+    // Os pinos do radar são desenhados em Flutter por cima do mapa
+    // compartilhado (o mesmo desenho no vetorial e no raster).
+    expect(find.byType(DriverRadarPin), findsNWidgets(2));
+    expect(find.byType(UserRadarDot), findsOneWidget);
     expect(find.byType(RadarHud), findsOneWidget);
 
     // "Dentro do mapa": a varredura e os pinos ficam na MESMA área do mapa,
     // não num card fora dele.
-    final map = tester.getRect(find.byType(FlutterMap));
+    final map = tester.getRect(find.byType(BaseMapView));
     final hud = tester.getRect(find.byType(RadarHud));
     expect(map.width, greaterThan(700),
         reason: 'o mapa ocupa a largura toda (radar não vive fora dele)');

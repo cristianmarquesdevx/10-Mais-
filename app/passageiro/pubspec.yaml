@@ -9,10 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_map: ^8.3.2
-  # Mesma base vetorial do mapa do motorista (Console Noturno), sem a
-  # camada de calor de chamadas — exclusiva do parceiro.
-  maplibre_gl: ^0.28.0
+  # O mapa (vetorial Console Noturno + fallback raster) vive no pacote
+  # compartilhado `ten_map` — o app não importa `flutter_map`/`maplibre_gl`
+  # direto, só o pacote.
   http: ^1.2.0
   intl: ^0.19.0
   latlong2: ^0.10.1

@@ -4,8 +4,8 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:ten_map/ten_map.dart';
 
 import '../theme/theme.dart';
 
@@ -18,20 +18,26 @@ import '../theme/theme.dart';
 class RadarHud extends StatelessWidget {
   const RadarHud({
     super.key,
-    required this.camera,
+    required this.viewport,
     required this.center,
     required this.radiusKm,
     required this.progress,
   });
 
-  final MapCamera? camera;
+  /// Câmera do mapa (o pacote compartilhado emite, seja vetorial ou raster).
+  final MapViewport? viewport;
+
+  /// Posição do passageiro (âncora da varredura).
   final LatLng? center;
+
   final double radiusKm;
   final double progress;
 
   @override
   Widget build(BuildContext context) {
-    if (camera == null || center == null) return const SizedBox.shrink();
+    final vp = viewport;
+    final c = center;
+    if (vp == null || c == null) return const SizedBox.shrink();
     final t = tokensOf(context);
     return IgnorePointer(
       // `willChange`: o desenho muda a cada quadro, então não vale a pena o
@@ -42,8 +48,8 @@ class RadarHud extends StatelessWidget {
         child: CustomPaint(
           willChange: true,
           painter: _RadarPainter(
-            camera: camera!,
-            center: center!,
+            viewport: vp,
+            center: c,
             radiusKm: radiusKm,
             progress: progress,
             base: t.primary,
@@ -57,7 +63,7 @@ class RadarHud extends StatelessWidget {
 
 class _RadarPainter extends CustomPainter {
   _RadarPainter({
-    required this.camera,
+    required this.viewport,
     required this.center,
     required this.radiusKm,
     required this.progress,
@@ -65,23 +71,17 @@ class _RadarPainter extends CustomPainter {
     required this.dark,
   });
 
-  final MapCamera camera;
+  final MapViewport viewport;
   final LatLng center;
   final double radiusKm;
   final double progress;
   final Color base;
   final bool dark;
 
-  /// 1 grau de latitude ≈ 111,32 km — projeção suficiente para o raio local.
-  static const _kmPerDegLat = 111.32;
-
   @override
   void paint(Canvas canvas, Size size) {
-    final c = camera.latLngToScreenOffset(center);
-    final north = camera.latLngToScreenOffset(
-      LatLng(center.latitude + radiusKm / _kmPerDegLat, center.longitude),
-    );
-    final r = (north - c).distance;
+    final c = viewport.project(center);
+    final r = viewport.pixelsForKm(radiusKm, at: center);
     if (!r.isFinite || r < 12) return;
 
     canvas.save();
@@ -157,7 +157,6 @@ class _RadarPainter extends CustomPainter {
       old.center != center ||
       old.radiusKm != radiusKm ||
       old.base != base ||
-      old.camera.zoom != camera.zoom ||
-      old.camera.center != camera.center ||
+      old.viewport != viewport ||
       old.dark != dark;
 }

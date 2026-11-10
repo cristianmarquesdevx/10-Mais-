@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:ten_map/ten_map.dart';
 
 import '../../main.dart';
 import '../api/client.dart';
@@ -39,10 +39,12 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
   bool _foreground = true;
 
   late final RadarApi _radar = widget.radar ?? RadarApi();
-  final MapController _map = MapController();
 
   /// Raio consultado. É o mesmo desenhado no HUD (anel externo).
   static const _radiusKm = 3.0;
+
+  /// Zoom do mapa da busca (convenção OSM: o pacote converte para o MapLibre).
+  static const _zoom = 13.4;
 
   LatLng? _center;
   bool _centerFromRide = false;
@@ -54,7 +56,12 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
   String? _radarCode;
   bool _radarLoading = false;
 
-  MapCamera? _camera;
+  /// Câmera do mapa (vetorial ou raster): o HUD e os pinos se posicionam por
+  /// ela, então precisam do mesmo estado.
+  ///
+  /// Fica num notifier (e não em `setState`): arrastar o mapa repinta só o
+  /// HUD, sem refazer a tela inteira a cada quadro.
+  final ValueNotifier<MapViewport?> _viewport = ValueNotifier(null);
 
   /// Varredura do radar. Ela NÃO roda no vsync: o mapa do passageiro ocupa a
   /// tela inteira e o HUD repinta por cima dele. A 60 quadros por segundo (um
@@ -131,9 +138,8 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
         _centerFromRide = false;
         _locationFailure = null;
         _locating = false;
-        _camera = null;
+        _viewport.value = null;
       });
-      _focusMap();
       await _refreshRadar();
     } on LocationException catch (e) {
       if (!mounted) return;
@@ -151,7 +157,6 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
         }
       });
       if (_center != null) {
-        _focusMap();
         await _refreshRadar();
       }
     }
@@ -161,15 +166,22 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
   /// para o passageiro (e os anéis do radar) ficarem na área visível.
   LatLng _viewCenter(LatLng c) => LatLng(c.latitude + 0.0045, c.longitude);
 
-  void _focusMap() {
-    final c = _center;
-    if (c == null) return;
-    try {
-      _map.move(_viewCenter(c), 13.4);
-      _camera = _map.camera;
-    } catch (_) {
-      // mapa ainda não montado — o onMapReady captura a câmera
+  /// Marcadores do mapa: o ponto do passageiro e os motoristas por perto.
+  List<MapMarker> _markers(LatLng center, {required bool searching}) {
+    if (!searching) {
+      return [
+        MapMarker(
+          point: center,
+          width: 40,
+          height: 40,
+          child: const UserRadarDot(),
+        ),
+      ];
     }
+    return radarMarkers(
+      drivers: _snapshot?.drivers ?? const <RadarDriver>[],
+      userPosition: center,
+    );
   }
 
   Future<void> _refreshRadar() async {
@@ -217,7 +229,7 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
     _radarPoll?.cancel();
     _sweepTimer?.cancel();
     _sweep.dispose();
-    _map.dispose();
+    _viewport.dispose();
     super.dispose();
   }
 
@@ -353,60 +365,30 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
     return Stack(
       fit: StackFit.expand,
       children: [
-        FlutterMap(
-          mapController: _map,
-          options: MapOptions(
-            initialCenter: _viewCenter(center),
-            initialZoom: 13.4,
-            onMapReady: () {
-              if (!mounted) return;
-              setState(() => _camera = _map.camera);
-            },
-            onPositionChanged: (camera, _) {
-              if (mounted) setState(() => _camera = camera);
-            },
-            interactionOptions: const InteractionOptions(
-              flags: InteractiveFlag.pinchZoom |
-                  InteractiveFlag.drag |
-                  InteractiveFlag.doubleTapZoom,
-            ),
-          ),
-          children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'app.dezemais.passageiro',
-            ),
-            if (searching)
-              DriverRadarLayer(
-                drivers: _snapshot?.drivers ?? const <RadarDriver>[],
-                userPosition: center,
-              ),
-            if (!searching)
-              MarkerLayer(markers: [
-                Marker(
-                  point: center,
-                  width: 40,
-                  height: 40,
-                  child: const _UserRadarDot(),
-                ),
-              ]),
-            const SimpleAttributionWidget(
-              source: Text('© OpenStreetMap contributors'),
-              alignment: Alignment.bottomRight,
-            ),
-          ],
+        // Mapa compartilhado: vetorial (Console Noturno) no Android/iOS e
+        // raster do OSM no fallback. Os pinos do radar são desenhados em
+        // Flutter por cima — a mesma imagem nos dois backends.
+        BaseMapView(
+          center: _viewCenter(center),
+          zoom: _zoom,
+          userAgentPackageName: 'app.dezemais.passageiro',
+          markers: _markers(center, searching: searching),
+          onViewport: (viewport) => _viewport.value = viewport,
         ),
-        if (searching && _radar.configured && _camera != null)
+        if (searching && _radar.configured)
           // Só este pedaço repinta a cada passo da varredura: o HUD já está
           // numa RepaintBoundary própria (radar_hud.dart) e o mapa por baixo
           // não é refeito.
           ValueListenableBuilder<double>(
             valueListenable: _sweep,
-            builder: (context, progress, _) => RadarHud(
-              camera: _camera,
-              center: center,
-              radiusKm: _snapshot?.radiusKm ?? _radiusKm,
-              progress: progress,
+            builder: (context, progress, _) => ValueListenableBuilder<MapViewport?>(
+              valueListenable: _viewport,
+              builder: (context, viewport, _) => RadarHud(
+                viewport: viewport,
+                center: center,
+                radiusKm: _snapshot?.radiusKm ?? _radiusKm,
+                progress: progress,
+              ),
             ),
           ),
         if (searching) _countChip(),
@@ -841,26 +823,6 @@ class _MapNote extends StatelessWidget {
       ]),
     );
   }
-}
-
-/// Ponto do passageiro no mapa da fila (branco com anel teal).
-class _UserRadarDot extends StatelessWidget {
-  const _UserRadarDot();
-
-  @override
-  Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          border: Border.all(color: tokensOf(context).primary, width: 4),
-          boxShadow: [
-            BoxShadow(
-                color: tokensOf(context).primary.withValues(alpha: 0.5),
-                blurRadius: 10,
-                offset: const Offset(0, 2)),
-          ],
-        ),
-      );
 }
 
 /// Origem → destino do pedido atual, para a espera não ser uma tela vazia.

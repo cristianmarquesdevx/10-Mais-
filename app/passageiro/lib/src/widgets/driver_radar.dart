@@ -1,62 +1,57 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:ten_map/ten_map.dart';
 
 import '../api/radar_api.dart';
 import '../theme/theme.dart';
 
-/// Camada de marcadores de motoristas próximos para o mapa do passageiro.
+/// Marcadores do radar de motoristas para o mapa do passageiro.
+///
 /// Exibe apenas motoristas ONLINE_DISPONIVEL dentro do raio de busca.
 /// Posições são aproximadas (privacidade do parceiro — nunca endereço exato).
-class DriverRadarLayer extends StatelessWidget {
-  const DriverRadarLayer({
-    super.key,
-    required this.drivers,
-    required this.userPosition,
-  });
-
-  final List<RadarDriver> drivers;
-  final LatLng userPosition;
-
-  @override
-  Widget build(BuildContext context) {
-    final markers = <Marker>[];
-
+///
+/// Os pinos continuam desenhados em Flutter: o mapa compartilhado só
+/// **posiciona** o marcador pela projeção da câmera. Assim o pino, a etiqueta
+/// de distância e o ponto do passageiro são os mesmos no mapa vetorial e no
+/// fallback raster.
+List<MapMarker> radarMarkers({
+  required List<RadarDriver> drivers,
+  required LatLng userPosition,
+}) {
+  final markers = <MapMarker>[
     // Marcador do passageiro (ponto de referência)
+    MapMarker(
+      point: userPosition,
+      width: 40,
+      height: 40,
+      child: const UserRadarDot(),
+    ),
+  ];
+
+  // Marcadores dos motoristas disponíveis
+  for (final d in drivers) {
+    if (!d.available) continue;
     markers.add(
-      Marker(
-        point: userPosition,
-        width: 40,
-        height: 40,
-        child: const _UserRadarDot(),
+      MapMarker(
+        point: LatLng(d.lat, d.lon),
+        // A caixa precisa caber o pino + a etiqueta de distância: com
+        // 34x34 o badge estourava o círculo (RenderFlex overflow).
+        width: 56,
+        height: 56,
+        child: DriverRadarPin(
+          distanceKm: d.distanceKm,
+          vehicle: d.vehicle,
+        ),
       ),
     );
-
-    // Marcadores dos motoristas disponíveis
-    for (final d in drivers) {
-      if (!d.available) continue;
-      markers.add(
-        Marker(
-          point: LatLng(d.lat, d.lon),
-          // A caixa precisa caber o pino + a etiqueta de distância: com
-          // 34x34 o badge estourava o círculo (RenderFlex overflow).
-          width: 56,
-          height: 56,
-          child: _DriverRadarPin(
-            distanceKm: d.distanceKm,
-            vehicle: d.vehicle,
-          ),
-        ),
-      );
-    }
-
-    return MarkerLayer(markers: markers);
   }
+
+  return markers;
 }
 
 /// Ponto do passageiro no radar (branco com anel verde pulsante).
-class _UserRadarDot extends StatelessWidget {
-  const _UserRadarDot();
+class UserRadarDot extends StatelessWidget {
+  const UserRadarDot({super.key});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -78,8 +73,9 @@ class _UserRadarDot extends StatelessWidget {
 }
 
 /// Pino do motorista no radar (branco com aro verde, ícone de carro).
-class _DriverRadarPin extends StatelessWidget {
-  const _DriverRadarPin({
+class DriverRadarPin extends StatelessWidget {
+  const DriverRadarPin({
+    super.key,
     required this.distanceKm,
     required this.vehicle,
   });

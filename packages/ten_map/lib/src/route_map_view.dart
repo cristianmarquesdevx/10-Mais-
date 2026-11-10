@@ -9,6 +9,7 @@ import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 
 import 'package:ten_design/ten_design.dart';
 
+import 'map_attribution.dart';
 import 'map_capabilities.dart';
 import 'map_layers.dart';
 import 'map_styles.dart';
@@ -259,26 +260,7 @@ class _VectorRouteMapState extends State<_VectorRouteMap> {
         // O crédito do OpenStreetMap é obrigatório (política do OSM): o
         // MapLibre vem com `attributionEnabled: false` (o botão nativo
         // cobriria o mapa), então o crédito é desenhado aqui.
-        if (widget.showAttribution)
-          Positioned(
-            right: 6,
-            bottom: 4,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: const Color(0x990B1220),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                  child: Text(
-                    '© OpenStreetMap · OpenFreeMap',
-                    style: TextStyle(fontSize: 9, color: Colors.white70),
-                  ),
-                ),
-              ),
-            ),
-          ),
+        if (widget.showAttribution) const MapAttribution(),
       ],
     );
   }
@@ -448,9 +430,9 @@ class _OriginDot extends StatelessWidget {
           border: Border.all(color: AppColors.primary, width: 5),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 8,
-              offset: const Offset(0, 2)),
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 8,
+                offset: const Offset(0, 2)),
           ],
         ),
       );
