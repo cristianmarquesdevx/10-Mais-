@@ -10,6 +10,9 @@ const defaultRadarBase = String.fromEnvironment(
   defaultValue: 'http://10.0.2.2:54321/functions/v1/radar',
 );
 
+/// Token fixo (build de dev). Em uso normal o token vem da SESSÃO: o radar
+/// exige o JWT do próprio parceiro, e é ele que impede um parceiro de
+/// publicar presença no nome de outro.
 const defaultRadarToken = String.fromEnvironment('RADAR_TOKEN');
 
 class PresenceProblem implements Exception {
@@ -25,17 +28,38 @@ class PresenceProblem implements Exception {
 class PresenceApi {
   PresenceApi({
     this.baseUrl = defaultRadarBase,
-    this.token = defaultRadarToken,
+    String? token,
+    FutureOr<String> Function()? tokenProvider,
     http.Client? client,
     this.timeout = const Duration(seconds: 7),
-  }) : _client = client ?? http.Client();
+  })  : _token = token,
+        _tokenProvider = tokenProvider,
+        _client = client ?? http.Client();
 
   final String baseUrl;
-  final String token;
+
+  /// Token fixo (build de dev). Tem precedência sobre nada: se houver um
+  /// provider, ele manda — é a sessão real.
+  final String? _token;
+
+  /// Fornecedor do token da sessão. É assíncrono porque o serviço de auth
+  /// renova a sessão quando o token está perto de vencer.
+  final FutureOr<String> Function()? _tokenProvider;
+
   final Duration timeout;
   final http.Client _client;
 
-  bool get configured => token.isNotEmpty && baseUrl.isNotEmpty;
+  /// Sem token não há presença: o servidor recusa e o app não pode fingir
+  /// que o parceiro está online.
+  bool get configured =>
+      baseUrl.isNotEmpty &&
+      (_tokenProvider != null || (_token ?? '').isNotEmpty);
+
+  Future<String> _bearer() async {
+    final provider = _tokenProvider;
+    if (provider != null) return await provider();
+    return _token ?? '';
+  }
 
   /// `ONLINE_DISPONIVEL` | `PAUSA` | `OFFLINE`. Posição é obrigatória nos dois
   /// primeiros (o servidor recusa sem ela).
@@ -49,7 +73,7 @@ class PresenceApi {
         .post(
           Uri.parse('$baseUrl/presence'),
           headers: {
-            'authorization': 'Bearer $token',
+            'authorization': 'Bearer ${await _bearer()}',
             'content-type': 'application/json',
           },
           body: jsonEncode({

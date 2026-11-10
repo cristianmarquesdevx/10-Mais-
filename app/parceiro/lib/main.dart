@@ -2,14 +2,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'src/api/client.dart';
+import 'src/api/presence_api.dart';
+import 'src/auth/auth_service.dart';
 import 'src/screens/screens.dart';
 import 'src/state/partner_controller.dart';
 import 'src/theme/theme.dart';
 
 /// Ponto de entrada do 10 é + Parceiro.
 ///
-/// Backend: Supabase Edge Functions sob /functions/v1/v1 (openapi.yaml).
-/// A URL e o token vêm do ambiente de build — nunca hardcoded em release.
+/// Backends (tudo vem do ambiente de build — nunca hardcoded em release):
+///
+///   `API_BASE`      o que ainda não migrou (KYC, passe, carteira,
+///                   desempenho, preferências) — em produção a mesma Edge
+///                   Function; no piloto, a API de demonstração.
+///   `RIDES_BASE`    o ciclo de corrida no Postgres (Edge Function `rides`).
+///   `AUTH_BASE`     o GoTrue (Supabase Auth). Vazio = modo dev: sem
+///                   servidor de acesso, o login aceita o OTP de 4 dígitos.
+///   `AUTH_ANON_KEY` chave pública do projeto (não é segredo).
 void main() {
   runApp(const ParceiroApp());
 }
@@ -22,6 +31,7 @@ class ParceiroApp extends StatefulWidget {
 }
 
 class _ParceiroAppState extends State<ParceiroApp> {
+  late final AuthService? _auth;
   late final ApiClient _api;
   late final PartnerController _partner;
   bool _signedIn = false; // P1: apresentação/login antes do shell
@@ -30,16 +40,63 @@ class _ParceiroAppState extends State<ParceiroApp> {
   @override
   void initState() {
     super.initState();
-    const fromEnv = String.fromEnvironment('API_BASE',
+    const apiBase = String.fromEnvironment('API_BASE',
         defaultValue: 'http://10.0.2.2:8787/functions/v1/v1');
-    // Token real vem do fluxo de auth (OTP F1); placeholder para dev local.
-    String token = const String.fromEnvironment('API_TOKEN', defaultValue: '');
-    _api = ApiClient(baseUrl: fromEnv, accessToken: () => token);
-    _partner = PartnerController(_api);
+    // Vazio = modo demonstração: o ciclo de corrida fica na API de demo.
+    // O build de piloto/piloto passa a URL real do Postgres.
+    const ridesBase = String.fromEnvironment('RIDES_BASE', defaultValue: '');
+    // Vazio = modo dev: sem servidor de acesso o login aceita o OTP de
+    // 4 dígitos. O build de piloto passa a URL do GoTrue.
+    const authBase = String.fromEnvironment('AUTH_BASE', defaultValue: '');
+    const authAnonKey = String.fromEnvironment('AUTH_ANON_KEY',
+        defaultValue: 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH');
+    // Token de build: é o plano B para quando não há sessão (dev/testes).
+    const buildToken = String.fromEnvironment('API_TOKEN', defaultValue: '');
+
+    // AUTH_BASE vazio = modo dev: sem servidor de acesso o app não pede
+    // código e não renova token (é o modo dos testes de layout).
+    _auth = authBase.isEmpty
+        ? null
+        : AuthService(baseUrl: authBase, anonKey: authAnonKey, role: 'PARTNER');
+
+    _api = ApiClient(
+      baseUrl: apiBase,
+      ridesBase: ridesBase,
+      // O token da sessão manda; o do build é o plano B. A chamada é
+      // assíncrona porque o serviço renova a sessão quando o token vence.
+      accessToken: () async {
+        final session = await _auth?.accessToken();
+        return session ?? buildToken;
+      },
+    );
+    final auth = _auth;
+    _partner = PartnerController(
+      _api,
+      // A presença no radar (Postgres) leva o token da SESÃO: é o que impede
+      // um parceiro de publicar posição no nome de outro. Sem sessão (modo
+      // dev) a presença fica desligada e a tela avisa em vez de fingir.
+      presence: auth == null
+          ? PresenceApi(token: defaultRadarToken)
+          : PresenceApi(tokenProvider: () async {
+              final session = await auth.accessToken();
+              return session ?? '';
+            }),
+    );
     _partner.loadMe(); // perfil/KYC ao abrir (P1 gate: em análise ≠ online)
     // Mostra o login imediatamente para evitar tela branca durante o carregamento do tema.
     // O tema continua carregando em segundo plano.
     _loadTheme();
+    _restoreSession();
+  }
+
+  /// Recupera a sessão salva: quem já entrou no app não vê o login de novo.
+  Future<void> _restoreSession() async {
+    final auth = _auth;
+    if (auth == null) return;
+    await auth.restore();
+    if (!mounted || !auth.isSignedIn) return;
+    setState(() => _signedIn = true);
+    _partner.loadMe();
   }
 
   Future<void> _loadTheme() async {
@@ -94,13 +151,19 @@ class _ParceiroAppState extends State<ParceiroApp> {
           },
           home: _signedIn
               ? AppShell(
-                  onLogout: () => setState(() {
-                    _signedIn = false;
-                    _partner.loadMe();
-                  }),
+                  onLogout: () {
+                    // Sair é real: a sessão do GoTrue acaba e o token deixa
+                    // de valer. O painel volta ao login.
+                    _auth?.signOut();
+                    setState(() {
+                      _signedIn = false;
+                      _partner.loadMe();
+                    });
+                  },
                 )
               : _apresentou
                   ? LoginScreen(
+                      auth: _auth,
                       onDone: () => setState(() => _signedIn = true),
                     )
                   : ApresentacaoScreen(

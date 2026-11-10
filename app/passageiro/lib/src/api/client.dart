@@ -574,18 +574,43 @@ class Invite {
 
 typedef IdempotencyKey = String Function();
 
+/// Token de acesso da sessão.
+///
+/// Pode ser síncrono (testes de contrato, build de dev com `API_TOKEN`) ou
+/// assíncrono (o serviço de auth renova a sessão sozinho quando o token está
+/// perto de vencer — a chamada precisa esperar por isso).
+typedef TokenProvider = FutureOr<String> Function();
+
 class ApiClient {
   ApiClient({
     required this.baseUrl,
     required this.accessToken,
+    this.ridesBase,
     http.Client? inner,
     IdempotencyKey? newIdemKey,
   })  : _http = inner ?? http.Client(),
         _newIdemKey = newIdemKey ?? _uuid;
 
-  /// Ex.: http://127.0.0.1:54321/functions/v1/v1 (local) — sem / no fim.
+  /// Base do que ainda roda na API de demonstração (perfil, KYC, suporte,
+  /// convites, raspadinha). Ex.: http://10.0.2.2:8787/functions/v1/v1
   final String baseUrl;
-  final String Function() accessToken;
+
+  /// Base do backend REAL do ciclo de corrida (Edge Function `rides` do
+  /// Supabase): cotação, pedido, histórico, fases, pagamento e avaliação.
+  ///
+  /// Quando vem nulo (testes de contrato, modo demo), tudo continua na base
+  /// de demonstração — o app não quebra e o comportamento é o de antes.
+  final String? ridesBase;
+
+  /// O ciclo de corrida já fala com o Postgres de verdade?
+  bool get usesRidesBackend => ridesBase != null && ridesBase!.isNotEmpty;
+
+  String get _ridesRoot {
+    final b = ridesBase ?? '';
+    return b.endsWith('/') ? b.substring(0, b.length - 1) : b;
+  }
+
+  final TokenProvider accessToken;
   final http.Client _http;
   final IdempotencyKey _newIdemKey;
 
@@ -600,8 +625,8 @@ class ApiClient {
     return '${h(0, 4)}-${h(4, 6)}-${h(6, 8)}-${h(8, 10)}-${h(10, 16)}';
   }
 
-  Map<String, String> get _headers => {
-        'authorization': 'Bearer ${accessToken()}',
+  Future<Map<String, String>> _headers() async => {
+        'authorization': 'Bearer ${await accessToken()}',
         'content-type': 'application/json',
       };
 
@@ -611,9 +636,13 @@ class ApiClient {
     Object? body,
     bool idempotent = false,
     Map<String, String>? query,
+    bool rides = false,
   }) async {
-    final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
-    final headers = {..._headers};
+    // `rides: true` manda a chamada para o backend real do ciclo de corrida
+    // — quando ele não está configurado, cai na base de demonstração.
+    final base = (rides && usesRidesBackend) ? _ridesRoot : baseUrl;
+    final uri = Uri.parse('$base$path').replace(queryParameters: query);
+    final headers = {...await _headers()};
     if (idempotent) headers['Idempotency-Key'] = _newIdemKey();
 
     final req = http.Request(method, uri)
@@ -640,7 +669,9 @@ class ApiClient {
 
   // --- contrato -----------------------------------------------------------
 
-  Future<Me> me() async => Me.fromJson(await _req('GET', '/me'));
+  /// Perfil do passageiro. No backend real vem do TOKEN (o `sub` do JWT):
+  /// o app mostra a conta que autenticou, não um usuário de demonstração.
+  Future<Me> me() async => Me.fromJson(await _req('GET', '/me', rides: true));
 
   /// Atualiza perfil do passageiro (nome, data de nascimento, peso, altura).
   /// 200 com o Me atualizado.
@@ -691,7 +722,7 @@ class ApiClient {
       'origin_lon': '${origin.lon}',
       'dest_lat': '${destination.lat}',
       'dest_lon': '${destination.lon}',
-    });
+    }, rides: true);
     return Quote.fromJson(j);
   }
 
@@ -725,23 +756,24 @@ class ApiClient {
           'destination_address': destinationAddress,
         if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
       },
+      rides: true,
     );
   }
 
   Future<Ride> ride(String id) async =>
-      Ride.fromJson(await _req('GET', '/rides/$id'));
+      Ride.fromJson(await _req('GET', '/rides/$id', rides: true));
 
   Future<List<Ride>> rideHistory({int limit = 20, DateTime? before}) async {
     final q = <String, String>{'limit': '$limit'};
     if (before != null) q['before'] = before.toUtc().toIso8601String();
-    final j = await _req('GET', '/rides', query: q);
+    final j = await _req('GET', '/rides', query: q, rides: true);
     return (j['rides'] as List)
         .map((e) => Ride.fromJson(e as Map<String, dynamic>))
         .toList();
   }
 
   Future<Ride?> activeRide() async {
-    final j = await _req('GET', '/rides', query: {'active': '1'});
+    final j = await _req('GET', '/rides', query: {'active': '1'}, rides: true);
     final rides = (j['rides'] as List?) ?? const [];
     return rides.isEmpty
         ? null
@@ -751,14 +783,14 @@ class ApiClient {
   /// 200 · 409 ride_already_closed
   Future<void> cancelRide(String id, String reason) async {
     await _req('POST', '/rides/$id/cancel',
-        idempotent: true, body: {'reason': reason});
+        idempotent: true, body: {'reason': reason}, rides: true);
   }
 
   /// 201 · 422 below_floor / above_ceiling / rate_limited
   Future<void> negotiate(String id,
       {required double amount, required String kind}) async {
     await _req('POST', '/rides/$id/negotiation',
-        idempotent: true, body: {'amount': amount, 'kind': kind});
+        idempotent: true, body: {'amount': amount, 'kind': kind}, rides: true);
   }
 
   /// Pesquisa endereços reais em tempo real (proxy Nominatim na demo).
@@ -836,18 +868,21 @@ class ApiClient {
     await _req('POST', '/rides/$id/rating', idempotent: true, body: {
       'stars': stars,
       if (comment != null && comment.isNotEmpty) 'comment': comment
-    });
+    }, rides: true);
   }
 
   /// 201 → { payment_id, pix: { qr, copia_cola, expires_at } } | { card_url }
   Future<Map<String, dynamic>> startRidePayment(String rideId, String method) =>
       _req('POST', '/payments/ride',
-          idempotent: true, body: {'ride_id': rideId, 'method': method});
+          idempotent: true,
+          body: {'ride_id': rideId, 'method': method},
+          rides: true);
 
   /// "Já paguei" do PIX: pergunta ao servidor se o PSP confirmou. O app não
   /// marca pago por conta própria — só reflete o payment_status do backend.
   Future<Ride> confirmRidePayment(String rideId) async => Ride.fromJson(
-      await _req('POST', '/rides/$rideId/payment/confirm', idempotent: true));
+      await _req('POST', '/rides/$rideId/payment/confirm',
+          idempotent: true, rides: true));
 
   Future<void> openTicket({required String priority, String? rideId}) =>
       _req('POST', '/support/tickets',

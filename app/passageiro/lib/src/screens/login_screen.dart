@@ -2,16 +2,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../assets/app_assets.dart';
+import '../auth/auth_service.dart';
 import '../theme/theme.dart';
 import 'widgets/carousel_destaques.dart';
 
 /// Tela de login com dois passos (celular → email → código OTP).
 /// Apresentação (carousel) é mostrada antes via navegação separada.
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, required this.onDone});
+  const LoginScreen({super.key, required this.onDone, this.auth});
 
-  /// Chamado após o OTP ser aceito (dev: qualquer 4 dígitos).
+  /// Chamado após o OTP ser aceito.
   final VoidCallback onDone;
+
+  /// Autenticação real (GoTrue). Quando é nulo, o app fica no MODO DEV: o
+  /// OTP de 4 dígitos é aceito sem servidor — é o que os testes de layout
+  /// exercitam. Com o serviço, o código de 6 dígitos é pedido ao servidor e
+  /// conferido nele.
+  final AuthService? auth;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -36,8 +43,26 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _busy = false;
   String? _error;
 
+  /// Modo dev (sem serviço de auth): o OTP de 4 dígitos passa sem servidor.
+  bool get _dev => widget.auth == null;
+
+  /// Quantos dígitos o código tem: 6 no GoTrue, 4 no modo dev.
+  int get _otpLength => _dev ? 4 : 6;
+
   /// Formato mínimo de e-mail: algo@dominio.tld (sem espaços).
   static final _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]{2,}$');
+
+  /// Mensagem de erro do serviço de auth — a tela decide pelo enum, o texto
+  /// é para o usuário.
+  String _authMessage(AuthException e) => switch (e.failure) {
+        AuthFailure.offline => 'Sem conexão com o servidor de acesso.',
+        AuthFailure.codeInvalid => 'Código incorreto. Confira o código recebido.',
+        AuthFailure.codeExpired => 'Este código expirou. Peça um novo.',
+        AuthFailure.rateLimited =>
+          'Muitos pedidos de código. Espere alguns minutos.',
+        AuthFailure.rejected => e.message,
+        AuthFailure.unknown => 'Falha ao falar com o servidor de acesso.',
+      };
 
   @override
   void initState() {
@@ -91,7 +116,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _focusAfterFrame(_emailFocus);
   }
 
-  void _submitEmail() {
+  Future<void> _submitEmail() async {
     final value = _email.text.trim();
     if (!_emailPattern.hasMatch(value)) {
       setState(() =>
@@ -99,27 +124,72 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     _emailFocus.unfocus();
+    if (_dev) {
+      setState(() {
+        _error = null;
+        _step = 2;
+      });
+      _focusAfterFrame(_otpFocus);
+      return;
+    }
+    // Autenticação real: o código é pedido ao GoTrue ANTES de mostrar a etapa
+    // do OTP — se o envio falhar, o usuário continua na etapa do e-mail em vez
+    // de receber um campo que nunca vai receber nada.
     setState(() {
+      _busy = true;
       _error = null;
-      _step = 2;
     });
-    _focusAfterFrame(_otpFocus);
+    try {
+      await widget.auth!.sendCode(value);
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _step = 2;
+      });
+      _focusAfterFrame(_otpFocus);
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = _authMessage(e);
+      });
+    }
   }
 
   Future<void> _submitOtp() async {
-    if (_otp.text.length < 4) {
-      setState(() => _error = 'Digite o código de 4 dígitos.');
+    final code = _otp.text.trim();
+    if (code.length < _otpLength) {
+      setState(() => _error = 'Digite o código de $_otpLength dígitos.');
       return;
     }
     setState(() {
       _busy = true;
       _error = null;
     });
-    // OTP F1: validação real vem do backend; dev segue adiante.
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
-    setState(() => _busy = false);
-    widget.onDone();
+    if (_dev) {
+      // Modo dev: o código não vai a nenhum servidor (é o que os testes de
+      // layout usam para chegar à home).
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+      setState(() => _busy = false);
+      widget.onDone();
+      return;
+    }
+    try {
+      await widget.auth!.verifyCode(_email.text.trim(), code);
+      // O telefone é registrado depois do login: o piloto não tem provedor de
+      // SMS, mas o contato continua indo para o backend.
+      await widget.auth!.attachPhone(_phone.text);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      widget.onDone();
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = _authMessage(e);
+      });
+    }
   }
 
   @override
@@ -170,6 +240,13 @@ class _LoginScreenState extends State<LoginScreen> {
                   otpFocus: _otpFocus,
                   busy: _busy,
                   error: _error,
+                  otpLength: _otpLength,
+                  // No piloto o código chega por e-mail (não há provedor de
+                  // SMS contratado); no modo dev a tela não promete nada.
+                  otpPrompt: _dev
+                      ? 'Enviamos um SMS para '
+                          '${_phone.text.replaceAll(RegExp(r'\D'), '')}'
+                      : 'Enviamos um código para ${_email.text.trim()}',
                   onSubmitPhone: _submitPhone,
                   onSubmitEmail: _submitEmail,
                   onSubmitOtp: _submitOtp,
@@ -264,6 +341,8 @@ class _AuthCard extends StatelessWidget {
     required this.otpFocus,
     required this.busy,
     required this.error,
+    required this.otpLength,
+    required this.otpPrompt,
     required this.onSubmitPhone,
     required this.onSubmitEmail,
     required this.onSubmitOtp,
@@ -276,6 +355,8 @@ class _AuthCard extends StatelessWidget {
   final FocusNode phoneFocus, emailFocus, otpFocus;
   final bool busy;
   final String? error;
+  final int otpLength;
+  final String otpPrompt;
   final VoidCallback onSubmitPhone, onSubmitEmail, onSubmitOtp;
   final ValueChanged<int> onChangeStep;
   final VoidCallback onClearError;
@@ -368,7 +449,7 @@ class _AuthCard extends StatelessWidget {
                     ),
                     const SizedBox(height: AppSpace.l),
                     GradientButton(
-                        onPressed: onSubmitEmail,
+                        onPressed: busy ? null : onSubmitEmail,
                         child: const Text('CONTINUAR')),
                     const SizedBox(height: AppSpace.m),
                     Center(
@@ -396,8 +477,8 @@ class _AuthCard extends StatelessWidget {
                     ]),
                     const SizedBox(height: AppSpace.xs),
                     Text(
-                        'Enviamos um SMS para ${phone.text.replaceAll(RegExp(r'\D'), '')}',
-                        style: labelStyle(context)),
+                      otpPrompt,
+                      style: labelStyle(context)),
                     const SizedBox(height: AppSpace.l),
                     TextField(
                       key: const ValueKey('login-otp'),
@@ -406,13 +487,13 @@ class _AuthCard extends StatelessWidget {
                       keyboardType: TextInputType.number,
                       textInputAction: TextInputAction.done,
                       autofillHints: const [AutofillHints.oneTimeCode],
-                      maxLength: 4,
+                      maxLength: otpLength,
                       textAlign: TextAlign.center,
                       style: AppType.display.copyWith(letterSpacing: 12),
                       onChanged: (_) => onClearError(),
                       decoration: InputDecoration(
                         counterText: '',
-                        hintText: '••••',
+                        hintText: '•' * otpLength,
                         prefixIcon: const Icon(Icons.sms_outlined),
                         errorText: error,
                         errorMaxLines: 2,

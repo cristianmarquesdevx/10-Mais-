@@ -691,18 +691,44 @@ class Invite {
 
 typedef IdempotencyKey = String Function();
 
+/// Token de acesso da sessão.
+///
+/// Pode ser síncrono (testes de contrato, build de dev com `API_TOKEN`) ou
+/// assíncrono (o serviço de auth renova a sessão sozinho quando o token está
+/// perto de vencer — a chamada precisa esperar por isso).
+typedef TokenProvider = FutureOr<String> Function();
+
 class ApiClient {
   ApiClient({
     required this.baseUrl,
     required this.accessToken,
+    this.ridesBase,
     http.Client? inner,
     IdempotencyKey? newIdemKey,
   })  : _http = inner ?? http.Client(),
         _newIdemKey = newIdemKey ?? _uuid;
 
-  /// Ex.: http://127.0.0.1:54321/functions/v1/v1 (local) — sem / no fim.
+  /// Base do que ainda roda na API de demonstração (perfil, KYC, passe,
+  /// carteira, desempenho, preferências). Ex.: http://10.0.2.2:8787/functions/v1/v1
   final String baseUrl;
-  final String Function() accessToken;
+
+  /// Base do backend REAL do ciclo de corrida (Edge Function `rides` do
+  /// Supabase): ofertas, aceite/recusa, fases da corrida, histórico e
+  /// pagamento.
+  ///
+  /// Quando vem nulo (testes de contrato, modo demo), tudo continua na base
+  /// de demonstração — o app não quebra e o comportamento é o de antes.
+  final String? ridesBase;
+
+  /// O ciclo de corrida já fala com o Postgres de verdade?
+  bool get usesRidesBackend => ridesBase != null && ridesBase!.isNotEmpty;
+
+  String get _ridesRoot {
+    final b = ridesBase ?? '';
+    return b.endsWith('/') ? b.substring(0, b.length - 1) : b;
+  }
+
+  final TokenProvider accessToken;
   final http.Client _http;
   final IdempotencyKey _newIdemKey;
 
@@ -717,8 +743,8 @@ class ApiClient {
     return '${h(0, 4)}-${h(4, 6)}-${h(6, 8)}-${h(8, 10)}-${h(10, 16)}';
   }
 
-  Map<String, String> get _headers => {
-        'authorization': 'Bearer ${accessToken()}',
+  Future<Map<String, String>> _headers() async => {
+        'authorization': 'Bearer ${await accessToken()}',
         'content-type': 'application/json',
       };
 
@@ -728,9 +754,13 @@ class ApiClient {
     Object? body,
     bool idempotent = false,
     Map<String, String>? query,
+    bool rides = false,
   }) async {
-    final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
-    final headers = {..._headers};
+    // `rides: true` manda a chamada para o backend real do ciclo de corrida
+    // — quando ele não está configurado, cai na base de demonstração.
+    final base = (rides && usesRidesBackend) ? _ridesRoot : baseUrl;
+    final uri = Uri.parse('$base$path').replace(queryParameters: query);
+    final headers = {...await _headers()};
     if (idempotent) headers['Idempotency-Key'] = _newIdemKey();
 
     final req = http.Request(method, uri)
@@ -757,7 +787,9 @@ class ApiClient {
 
   // --- perfil -------------------------------------------------------------
 
-  Future<Me> me() async => Me.fromJson(await _req('GET', '/me'));
+  /// Perfil do parceiro. No backend real vem do TOKEN (o `sub` do JWT):
+  /// o app mostra a conta que autenticou, não um usuário de demonstração.
+  Future<Me> me() async => Me.fromJson(await _req('GET', '/me', rides: true));
 
   // --- presença (P2 painel) ----------------------------------------------
 
@@ -827,7 +859,7 @@ class ApiClient {
   // --- ofertas (P3) -------------------------------------------------------
 
   Future<List<Offer>> myOffers() async {
-    final j = await _req('GET', '/offers/mine');
+    final j = await _req('GET', '/offers/mine', rides: true);
     return (j['offers'] as List)
         .map((e) => Offer.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -835,12 +867,12 @@ class ApiClient {
 
   /// 200 (aceita, snapshot capturado) · 409 offer_unavailable.
   Future<void> acceptOffer(String offerId) =>
-      _req('POST', '/offers/$offerId/accept', idempotent: true);
+      _req('POST', '/offers/$offerId/accept', idempotent: true, rides: true);
 
   /// 200 → o que foi perdido (valor, coleta e aceite antes/depois);
   /// 409 offer_unavailable → a oferta já não estava mais viva.
   Future<OfferLoss?> declineOffer(String offerId) async {
-    final j = await _req('POST', '/offers/$offerId/decline');
+    final j = await _req('POST', '/offers/$offerId/decline', rides: true);
     final loss = j['loss'];
     return loss is Map<String, dynamic> ? OfferLoss.fromJson(loss) : null;
   }
@@ -849,7 +881,7 @@ class ApiClient {
   /// Null quando o servidor não sabe explicar ou a oferta não existe.
   Future<OfferLoss?> offerOutcome(String offerId) async {
     try {
-      final j = await _req('GET', '/offers/$offerId');
+      final j = await _req('GET', '/offers/$offerId', rides: true);
       final loss = j['loss'];
       return loss is Map<String, dynamic> ? OfferLoss.fromJson(loss) : null;
     } on ApiProblem catch (p) {
@@ -861,13 +893,13 @@ class ApiClient {
   // --- transições da corrida (P4/P5) --------------------------------------
 
   Future<Ride> ride(String id) async =>
-      Ride.fromJson(await _req('GET', '/rides/$id'));
+      Ride.fromJson(await _req('GET', '/rides/$id', rides: true));
 
   /// Histórico do parceiro: corridas concluídas/canceladas em que houve
   /// aceite (partner atribuído). A demo filtra as simuladas; o backend real
-  /// terá um escopo por parceiro (GET /partner/rides).
+  /// devolve as corridas do próprio parceiro (escopo pelo token).
   Future<List<Ride>> myRides() async {
-    final j = await _req('GET', '/rides');
+    final j = await _req('GET', '/rides', rides: true);
     final list = (j['rides'] as List).cast<Map<String, dynamic>>();
     return list
         .where((r) {
@@ -898,6 +930,7 @@ class ApiClient {
           if (fareTotal != null) 'fare_total': fareTotal,
           if (cashDeclared != null) 'cash_declared': cashDeclared,
         },
+        rides: true,
       );
 
   // --- passe (P6) ---------------------------------------------------------

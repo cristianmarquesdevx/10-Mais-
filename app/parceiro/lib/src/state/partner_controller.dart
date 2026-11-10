@@ -245,29 +245,16 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
           }
           at = GeoPoint(fix.lat, fix.lon);
         }
-        final r = await api.goOnline(
+        // A resposta do online é a confirmação da presença; modo e validade
+        // do passe NÃO vêm daqui: o perfil (`/me`) é a fonte, e ele vem do
+        // backend real quando o ciclo de corrida já roda no Postgres.
+        await api.goOnline(
           lat: at.lat,
           lon: at.lon,
         );
         status = PartnerStatus.online;
         _lastPosition = at;
         _clearBreak(); // encerra qualquer pausa ao voltar online
-        if (me?.partner != null) {
-          final p = me!.partner!;
-          me = Me(
-            userId: me!.userId,
-            role: me!.role,
-            partner: PartnerInfo(
-              kycStatus: p.kycStatus,
-              monetizationMode: (r['mode'] as String?) ?? p.monetizationMode,
-              passExpiresAt: r['pass_expires_at'] != null
-                  ? DateTime.parse(r['pass_expires_at'] as String)
-                  : p.passExpiresAt,
-              walletBalance: p.walletBalance,
-              debtCents: p.debtCents,
-            ),
-          );
-        }
         _startPolling();
         await refreshOffers();
         // Só depois do sucesso da API: publica a presença que o radar lê.
