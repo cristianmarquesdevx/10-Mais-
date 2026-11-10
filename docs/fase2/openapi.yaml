@@ -4,16 +4,30 @@ info:
   version: 1.0.0
   description: |
     Contract for the Edge Functions of "10 é +" (dezemais) — MVP-A (rides).
-    All endpoints are served by Supabase Edge Functions under /functions/v1/v1.
     Authentication: Supabase JWT (Authorization: Bearer <access_token>); the
     caller's uid comes from the token (never from the body). Role is derived
     server-side (RLS + domain functions).
     Money amounts are BRL with 2 decimals. All timestamps are RFC3339 UTC.
     Mutating endpoints require an `Idempotency-Key` header (UUID); replays with
     the same key return the original result (200) without side effects.
+
+    WHERE EACH ROUTE LIVES TODAY (the contract is one, the deployment is not):
+
+      - Postgres-backed (Edge Function `rides`): `/me`, `/quote`, `/rides*`,
+        `/offers*`, `/partner/transitions`, `/payments/ride`. These are the
+        routes of the ride cycle — the source of truth is the database
+        (`api_*` / `fn_*`), and the function is a thin facade.
+      - Still on the demo API (migrates later): profile, KYC, wallet, passes,
+        preferences, performance, heatmap, nearby, support, invites, scratch.
+
+    The `rides` function is addressed BY ITS NAME: `/functions/v1/rides/<path>`.
+    The historical `/functions/v1/v1/<path>` never resolved — the Kong route
+    strips `/functions/v1` and the function is reached by name.
 servers:
-  - url: http://127.0.0.1:54321/functions/v1/v1      # local (supabase start)
-  - url: https://<project-ref>.supabase.co/functions/v1/v1  # hosted
+  - url: http://127.0.0.1:54321/functions/v1/rides    # local (supabase start)
+    description: Postgres-backed ride cycle (Edge Function `rides`)
+  - url: https://<project-ref>.supabase.co/functions/v1/rides  # hosted
+    description: Postgres-backed ride cycle (Edge Function `rides`)
 security:
   - supabaseAuth: []
 paths:
@@ -687,9 +701,45 @@ paths:
                 method: { type: string, enum: [PIX, CARD] }
       responses:
         '201': { description: 'Returns { payment_id, pix: { qr, copia_cola, expires_at } } or { card_url }' }
+
+  /rides/{rideId}/payment/confirm:
+    post:
+      summary: "The passenger's 'Já paguei' — asks the SERVER whether the PSP confirmed"
+      description: >
+        This endpoint CONFIRMS NOTHING. It only reads the server state and
+        returns the ride (the same shape as GET /rides/{rideId}) with the
+        payment status on top. The only door that confirms money is the signed
+        PSP webhook (Edge Function `psp-webhook`, server-to-server): the app
+        asks, the PSP answers.
+      parameters:
+        - { name: rideId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: >
+            The ride plus { payment_id, payment_method, payment_status,
+            confirmed_by: "psp_webhook" }. `payment_status` is CONFIRMED only
+            after the PSP webhook landed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Ride' }
+                  - type: object
+                    properties:
+                      payment_id: { type: string, format: uuid, nullable: true }
+                      payment_method: { type: string, nullable: true, enum: [PIX, CARD, CASH, null] }
+                      payment_status: { type: string, enum: [NOT_DUE, PENDING, CONFIRMED, FAILED, REFUNDED] }
+                      confirmed_by: { type: string, example: psp_webhook }
+        '404': { $ref: '#/components/responses/Problem' }
+
   /webhooks/psp:
     post:
       summary: PSP webhook (signature-verified; idempotent; service-role only)
+      description: >
+        Served by its own Edge Function (`/functions/v1/psp-webhook`), not by
+        the `rides` function: it is server-to-server and authenticates with
+        the shared PSP secret, never with a user token.
       security: []
       responses:
         '200': { description: Ack (always 200 after signature validation) }
@@ -871,11 +921,15 @@ components:
         created_at: { type: string, format: date-time }
     Me:
       type: object
+      description: >
+        The caller's own profile, read from the TOKEN (`auth.uid()`), never
+        from the body. `partner` is present only when role=PARTNER.
       required: [user_id, role]
       properties:
         user_id: { type: string, format: uuid }
         role: { type: string, enum: [PASSENGER, PARTNER, AGENT, ADMIN] }
         phone_e164: { type: string, nullable: true, example: '+5569999999999' }
+        email: { type: string, nullable: true, format: email }
         full_name: { type: string, nullable: true, maxLength: 120 }
         birth_date:
           type: string
