@@ -219,6 +219,11 @@ Teste ao vivo: corrida com tarifa congelada de **R$ 10,00** → proposta de **R$
 **Impacto:** os defeitos acima passam verdes.
 **Solução:** pirâmide da Fase 7: testes puros do motor de preço e do score, testes de API com banco real (Testcontainers/Docker), testes de widget dos 8 estados do radar e testes de concorrência do aceite.
 
+### F-19 · B — O teclado empurra a cotação para fora da tela (achado em 11/11/2026)
+**Evidência:** `destino_screen.dart` — ao confirmar o número do endereço, o teclado continuava aberto; com o teclado a tela perde ~40% da altura e o card "Valor da corrida" (com o preço e o CTA "Chamar") sai da área visível. Prova: `.preview/e2e_auto/20261111-012937-a1/failure-sem-cotacao.png` (o `uiautomator`, que só enxerga o que está na tela, não achava o preço) contra `20261111-020938-a1/02b-passageiro-radar.png` (sem teclado, o formulário inteiro cabe).
+**Impacto:** o passageiro pode **chamar sem ver o preço** — e o E2E lia "não encontrei a cotação" como se fosse defeito do produto, quando era de tela.
+**Solução:** **fechada** — o endereço completo fecha o teclado (`FocusScope.unfocus` em `_pick`), com teste de regressão C10; o harness também confere e fecha o teclado antes de ler o preço (`Ui.dismiss_keyboard`, que só manda BACK se o IME estiver aberto — BACK cego voltaria a rota).
+
 ---
 
 ## 4. Verificação da contagem de motoristas (item 5)
