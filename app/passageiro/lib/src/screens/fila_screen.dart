@@ -31,11 +31,15 @@ class FilaScreen extends StatefulWidget {
   final LocationService location;
   final RadarApi? radar;
 
-  /// Contador depresence que a tela de destino já leu.
+  /// Contador de presença que a tela de destino já leu.
   ///
   /// A busca abre com o número na tela: o passageiro não vê "consultando
   /// motoristas" quando o dado já está no servidor. Sem este snapshot, a tela
   /// busca sozinha (é o caminho quando a fila é aberta por outro motivo).
+  ///
+  /// O caminho normal é o **argumento da rota** (`pushNamed('/fila',
+  /// arguments: snapshot)`); este parâmetro é a mesma coisa, injetada direto
+  /// (testes e quem abre a fila sem argumentos).
   final RadarSnapshot? initialSnapshot;
 
   @override
