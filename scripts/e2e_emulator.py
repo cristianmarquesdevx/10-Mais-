@@ -76,6 +76,7 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -100,6 +101,7 @@ DEFAULT_STACK_BASE = "http://127.0.0.1:54321"
 DEFAULT_MAIL_BASE = "http://127.0.0.1:54324/api/v1"
 DEFAULT_RIDES_BASE = "http://10.0.2.2:54321/functions/v1/rides"
 DEFAULT_AUTH_BASE = "http://10.0.2.2:54321/auth/v1"
+DEFAULT_RADAR_BASE = "http://10.0.2.2:54321/functions/v1/radar"
 DEFAULT_ANON_KEY = "sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH"
 DEFAULT_PSP_SECRET = "dev-local-2f8a1c4e6b9d3f70"
 DEFAULT_JWT_SECRET = "super-secret-jwt-token-with-at-least-32-characters-long"
@@ -109,6 +111,21 @@ DEV_PASSAGEIRO = "11111111-1111-4111-8111-111111111111"
 DEV_PARCEIRO = "22222222-2222-4222-8222-222222222222"
 LOGIN_PASSAGEIRO = "passageiro@dezemais.local"
 LOGIN_PARCEIRO = "parceiro@dezemais.local"
+# Janela da oferta no contrato: `PRM-oferta.timeout` (SPECS §1.1, seed.sql,
+# API de demo, `city_param` no Postgres). O E2E confere no servidor — é a
+# guarda contra a configuração da cidade divergir do SPEC.
+OFERTA_TIMEOUT_CONTRATO_S = 15.0
+
+
+def _iso(valor: object) -> datetime:
+    """Carimbo ISO do servidor → datetime com fuso (UTC quando o texto é Z)."""
+    texto = str(valor).strip()
+    if texto.endswith("Z"):
+        texto = texto[:-1] + "+00:00"
+    dt = datetime.fromisoformat(texto)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 class E2EFailure(RuntimeError):
@@ -218,23 +235,38 @@ class Adb:
     def launch(self, package: str) -> None:
         """Abre o app e garante que ele fica em primeiro plano.
 
-        O `monkey` injeta o evento, mas o app às vezes fica **por baixo** de
-        outra janela (keyguard, tela de bloqueio, widget do launcher): o
-        uiautomator passa a ver a tela errada e o fluxo falha como se o
-        produto estivesse quebrado. Aqui a tela é acordada, o keyguard sai e
-        o foco é conferido — com uma segunda tentativa.
+        O `am start` (intent do launcher) traz a tarefa para a frente sem
+        injetar eventos: ~1 s contra ~2 s do `monkey`. A diferença importa:
+        a oferta do parceiro vive 15 s (PRM-oferta.timeout) e cada segundo
+        do harness sai da janela do produto.
+
+        O `monkey` continua como reserva (se o `am start` não resolver a
+        activity). O `monkey` injeta o evento, mas o app às vezes fica
+        **por baixo** de outra janela (keyguard, tela de bloqueio, widget
+        do launcher): o uiautomator passa a ver a tela errada e o fluxo
+        falha como se o produto estivesse quebrado. Aqui a tela é acordada,
+        o keyguard sai e o foco é conferido — com uma segunda tentativa.
         """
         for attempt in range(2):
-            out = run(
-                self.cmd(
-                    "shell", "monkey", "-p", package,
-                    "-c", "android.intent.category.LAUNCHER", "1",
-                ),
-                capture=True,
-                timeout=60,
+            out = self.shell(
+                "am", "start",
+                "-a", "android.intent.action.MAIN",
+                "-c", "android.intent.category.LAUNCHER",
+                "-n", f"{package}/{package}.MainActivity",
             )
-            if "Events injected: 1" not in out:
-                raise E2EFailure(f"não consegui abrir {package}:\n{out}")
+            if "Error" in out or "Exception" in out:
+                # `am start` não resolveu (activity com outro nome): o
+                # monkey resolve pelo intent do launcher.
+                out = run(
+                    self.cmd(
+                        "shell", "monkey", "-p", package,
+                        "-c", "android.intent.category.LAUNCHER", "1",
+                    ),
+                    capture=True,
+                    timeout=60,
+                )
+                if "Events injected: 1" not in out:
+                    raise E2EFailure(f"não consegui abrir {package}:\n{out}")
             if self._focused_within(package, timeout=15):
                 return
             if attempt == 0:
@@ -384,10 +416,17 @@ class Emulator:
             # emulator.log é o único lugar onde a causa ainda existe.
             "-show-kernel",
         ]
-        # Sem --gpu: deixa o emulador escolher. Forçar swiftshader derrubava o
-        # AVD em Windows no meio do fluxo; headless não tem GPU de host, então
-        # aí o software renderer é o default.
-        args += ["-gpu", gpu] if gpu else (["-gpu", "swiftshader_indirect"] if headless else [])
+        # GPU: sem --gpu, o emulador escolhe. Em headless (sem janela) o
+        # default do emulador no Windows é o rasterizador por software
+        # (swiftshader), que deixa cada frame do mapa em ~5 s — o mapa do
+        # passageiro vira o gargalo do teste. A GPU do HOST (OpenGL ES
+        # Translator) renderiza o mesmo mapa em milissegundos e roda
+        # headless sem janela; por isso o default em headless é "host".
+        # ( lavapipe/swatchsdl continuam disponíveis por --gpu.)
+        if gpu:
+            args += ["-gpu", gpu]
+        elif headless:
+            args += ["-gpu", "host"]
         if headless:
             args.append("-no-window")
         print(f"    subindo AVD {avd} ({self.serial})")
@@ -472,13 +511,24 @@ class Ui:
         raw = ""
         for attempt in range(4):
             self.adb.shell("rm", "-f", "/sdcard/e2e-ui.xml")
-            # `--compressed` (da 3ª tentativa em diante) costuma resolver o
-            # "could not get idle state" quando algum widget segue animando;
-            # as features que ele omite não são usadas na busca por rótulo.
-            extra = ("--compressed",) if attempt >= 2 else ()
+            # `--compressed` SEMPRE: medido neste emulador, o dump completo
+            # leva ~7 s e o comprimido ~2,2 s (o XML perde nós que não têm
+            # rótulo — nada que a busca por texto use). A diferença é
+            # decisiva: a oferta do parceiro vive 15 s (PRM-oferta.timeout) e
+            # o roteiro fazia 5 dumps no caminho crítico — 35 s de espera
+            # quando o teste perdia a corrida por lentidão do harness,
+            # não por defeito do produto.
+            extra = ("--compressed",)
+            t0 = time.monotonic()
             out = self.adb.shell(
                 "uiautomator", "dump", *extra, "/sdcard/e2e-ui.xml"
             )
+            elapsed = time.monotonic() - t0
+            # O dump espera a tela "parada": em tela com animação (o radar
+            # pulsando, o cronômetro da oferta) ele espera o tempo de idle do
+            # sistema. Medir é o que permite saber onde o tempo foi.
+            if elapsed > 1.5:
+                print(f"    dump lento: {elapsed:.1f}s")
             last = out
             if "dumped" in out.lower():
                 raw = run(
@@ -534,14 +584,57 @@ class Ui:
             except E2EFailure:
                 time.sleep(0.5)
                 continue
+            self.remember_labels(root)
             for label, x, y, _ in self.nodes(root):
                 match = label == text if exact else needle in label.lower()
                 if match:
+                    self._remember_pos(text, exact, (x, y))
                     return x, y
             if self.dismiss_system_dialogs(root):
                 continue
             time.sleep(0.5)
         return None
+
+    def find_regex(
+        self,
+        pattern: str,
+        *,
+        timeout: float = 10.0,
+    ) -> str | None:
+        """Procura um rótulo que case a expressão regular (e devolve o rótulo).
+
+        Por que existe: `find`/`wait_text` casam por SUBSTRING — "motorista"
+        também casa em "Nenhum motorista por perto". O E2E passava com o radar
+        vazio por causa disso. A regex exige o número positivo.
+        """
+        deadline = time.monotonic() + timeout
+        rx = re.compile(pattern, re.IGNORECASE)
+        while time.monotonic() < deadline:
+            try:
+                root = self.dump(save_on_error=False)
+            except E2EFailure:
+                time.sleep(0.5)
+                continue
+            for label, _x, _y, _ in self.nodes(root):
+                if rx.search(label):
+                    return label
+            if self.dismiss_system_dialogs(root):
+                continue
+            time.sleep(0.5)
+        return None
+
+    def wait_regex(self, pattern: str, *, timeout: float = 30.0) -> str:
+        label = self.find_regex(pattern, timeout=timeout)
+        if label is None:
+            self.shot(
+                f"missing-regex-{re.sub(r'[^a-z0-9]+', '-', pattern.lower())[:40]}"
+            )
+            raise E2EFailure(
+                f"timeout esperando /{pattern}/ em {timeout:.0f}s"
+                f" — rótulos na tela: {self.visible_summary()}"
+            )
+        print(f"    ok  /{pattern}/ -> {label!r}")
+        return label
 
     def tap(
         self,
@@ -551,7 +644,9 @@ class Ui:
         timeout: float = 10.0,
         required: bool = True,
     ) -> bool:
-        pos = self.find(text, exact=exact, timeout=timeout)
+        pos = self._recent_pos(text, exact)
+        if pos is None:
+            pos = self.find(text, exact=exact, timeout=timeout)
         if pos is None:
             if not required:
                 return False
@@ -561,6 +656,54 @@ class Ui:
         print(f"    tap {text!r} @ {pos}")
         return True
 
+    # A posição vista há pouco pode ser reaproveitada: um `uiautomator dump`
+    # leva ~2,2 s neste emulador e a oferta do parceiro vive 15 s. Reaproveitar
+    # o dump do `wait_text` que acabou de encontrar o botão poupa ~2 s da
+    # janela — sem mudar o que é verificado.
+    _LAST_HIT_TTL_S = 4.0
+    _recent: dict[tuple[str, bool], tuple[tuple[int, int], float]] = {}
+
+    def _remember_pos(self, text: str, exact: bool, pos: tuple[int, int]) -> None:
+        self._recent[(text, exact)] = (pos, time.monotonic())
+
+    def _remember_labels(self, root: ET.Element) -> None:
+        """Guarda as posições de todos os rótulos de um dump.
+
+        Serve para o toque seguinte não precisar de OUTRO dump: a tela não
+        mudou entre os dois (o harness acabou de ler).
+        """
+        at = time.monotonic()
+        for label, x, y, _ in self.nodes(root):
+            # Sobrescreve (não `setdefault`): este dump é mais novo que o
+            # anterior, e é ele que vale como posição atual. Sem isso o
+            # carimbo ficava no dump velho e o toque seguinte expirava
+            # (TTL de 4 s) — gastando um dump inteiro (~2,5 s) da janela.
+            self._recent[(label, True)] = ((x, y), at)
+            self._recent[(label, False)] = ((x, y), at)
+
+    # Alias público: o roteiro (fora da classe) também guarda o dump que leu.
+    remember_labels = _remember_labels
+
+    def _recent_pos(self, text: str, exact: bool) -> tuple[int, int] | None:
+        hit = self._recent.get((text, exact))
+        if hit is not None:
+            pos, at = hit
+            if time.monotonic() - at <= self._LAST_HIT_TTL_S:
+                return pos
+            return None
+        if not exact:
+            # `find` sem `exact` casa por substring: procura o mesmo jeito.
+            needle = text.lower()
+            best: tuple[tuple[int, int], float] | None = None
+            for (label, was_exact), value in self._recent.items():
+                if was_exact or needle not in label.lower():
+                    continue
+                if best is None or value[1] > best[1]:
+                    best = value
+            if best is not None and time.monotonic() - best[1] <= self._LAST_HIT_TTL_S:
+                return best[0]
+        return None
+
     def wait_text(
         self,
         text: str,
@@ -568,12 +711,14 @@ class Ui:
         exact: bool = False,
         timeout: float = 30.0,
     ) -> None:
-        if self.find(text, exact=exact, timeout=timeout) is None:
+        pos = self.find(text, exact=exact, timeout=timeout)
+        if pos is None:
             self.shot(f"missing-{re.sub(r'[^a-z0-9]+', '-', text.lower())[:40]}")
             raise E2EFailure(
                 f"timeout esperando {text!r} em {timeout:.0f}s"
                 f" — rótulos na tela: {self.visible_summary()}"
             )
+        self._remember_pos(text, exact, pos)
         print(f"    ok  {text!r}")
 
     def visible_summary(self, limit: int = 8) -> str:
@@ -603,6 +748,7 @@ class Ui:
             except E2EFailure:
                 time.sleep(0.5)
                 continue
+            self.remember_labels(root)
             valor = self._price_in(root, prefer_card=True)
             if valor is None:
                 valor = self._price_in(root, prefer_card=False)
@@ -714,6 +860,35 @@ class Ui:
         self.adb.shell("input", "keyevent", "4")
         time.sleep(0.4)
 
+    def keyboard_visible(self) -> bool:
+        """O teclado (IME) está aberto nesta tela?
+
+        Importa porque o `BACK` (keyevent 4) **volta a rota** quando o
+        teclado já está fechado — um `hide_keyboard()` cego pode desandar no
+        fluxo. Este helper pergunta ao próprio Android.
+        """
+        out = self.adb.shell("dumpsys", "input_method")
+        for line in out.splitlines():
+            if "mInputShown=" in line:
+                return "mInputShown=true" in line
+        return False
+
+    def dismiss_keyboard(self) -> bool:
+        """Fecha o teclado **só** se ele estiver aberto. Devolve o que fez.
+
+        Com o teclado aberto, a tela perde ~40% da altura e o card de cotação
+        do destino fica abaixo da dobra — o `uiautomator dump` não enxerga
+        o que está fora da área visível, e o E2E lia "não achei a cotação".
+        O app já fecha o teclado quando o endereço fica completo (correção
+        na raiz); isto é a rede de proteção do harness.
+        """
+        if not self.keyboard_visible():
+            return False
+        self.adb.shell("input", "keyevent", "4")
+        time.sleep(0.6)
+        print("    teclado fechado (a cotação ficava fora da tela)")
+        return True
+
     def back(self) -> None:
         self.adb.shell("input", "keyevent", "4")
         time.sleep(0.5)
@@ -734,8 +909,20 @@ class Ui:
             print(f"    aviso: screenshot {name} falhou ({exc})", file=sys.stderr)
             return None
         path.write_bytes(data)
-        print(f"    screenshot {path.name}")
+        print(f"    [{_clock()}] screenshot {path.name}")
         return path
+
+
+def _clock() -> str:
+    """Hora local no formato HH:MM:SS.mmm — para medir a janela da oferta.
+
+    A oferta vive 15 s (PRM-oferta.timeout). Sem carimbo de tempo nos passos
+    do roteiro é impossível dizer onde o tempo foi: o sintoma é o mesmo
+    ("Oferta perdida por tempo") tanto se o atraso está no despacho do
+    servidor quanto se está no harness esperando a tela.
+    """
+    t = time.time()
+    return time.strftime("%H:%M:%S", time.localtime(t)) + f".{int((t % 1) * 1000):03d}"
 
 
 def api(
@@ -799,6 +986,7 @@ class RealBackend:
         stack_base: str = DEFAULT_STACK_BASE,
         device_rides_base: str = DEFAULT_RIDES_BASE,
         device_auth_base: str = DEFAULT_AUTH_BASE,
+        device_radar_base: str = DEFAULT_RADAR_BASE,
         anon_key: str = DEFAULT_ANON_KEY,
         mail_base: str = DEFAULT_MAIL_BASE,
         psp_secret: str = DEFAULT_PSP_SECRET,
@@ -810,6 +998,7 @@ class RealBackend:
         self.stack_base = stack_base.rstrip("/")
         self.device_rides_base = device_rides_base
         self.device_auth_base = device_auth_base
+        self.device_radar_base = device_radar_base
         self.anon_key = anon_key
         self.mail_base = mail_base.rstrip("/")
         self.psp_secret = psp_secret
@@ -823,6 +1012,10 @@ class RealBackend:
             f"API_BASE={self.device_api_base}",
             f"RIDES_BASE={self.device_rides_base}",
             f"AUTH_BASE={self.device_auth_base}",
+            # A presença e o radar (Postgres) também são reais neste build:
+            # sem isto o parceiro publicaria presença na API de demo e o
+            # passageiro veria os motoristas sintéticos dela.
+            f"RADAR_BASE={self.device_radar_base}",
             f"AUTH_ANON_KEY={self.anon_key}",
         ]
 
@@ -989,6 +1182,61 @@ class RealBackend:
             f"WHERE partner_user_id = '{partner_id}'")
         return rows[0] if rows else "AUSENTE"
 
+    def presence_age_s(self, partner_id: str = DEV_PARCEIRO) -> float | None:
+        """Segundos desde o último heartbeat da presença (None se não há linha).
+
+        O servidor só mostra quem deu sinal de vida nos últimos 90 s. Esta
+        idade é o invariante do produto: enquanto o parceiro está online, a
+        presença precisa ficar fresca — mesmo com o app em segundo plano.
+        """
+        rows = self.psql(
+            "SELECT EXTRACT(EPOCH FROM (now() - last_heartbeat_at))::float "
+            "FROM partner_presence "
+            f"WHERE partner_user_id = '{partner_id}'")
+        if not rows:
+            return None
+        try:
+            return float(rows[0])
+        except ValueError:
+            return None
+
+    def offer_window_s(self) -> float | None:
+        """Janela da última oferta (timeout_at - sent_at), em segundos.
+
+        É o `PRM-oferta.timeout` do contrato (15 s). Conferir no servidor —
+        e não no relógio do cliente — é o que pega a classe de bug em que a
+        configuração da cidade diverge do contrato (no banco local a janela
+        estava em 60 s enquanto o SPEC, o seed e a API de demo dizem 15 s:
+        o passageiro esperava 4× mais por um motorista que não respondeu).
+        """
+        rows = self.psql(
+            "SELECT EXTRACT(EPOCH FROM (timeout_at - sent_at))::float "
+            "FROM offers ORDER BY sent_at DESC LIMIT 1")
+        if not rows:
+            return None
+        try:
+            return float(rows[0])
+        except ValueError:
+            return None
+
+    def offer_sent_at(self) -> datetime | None:
+        """Quando o servidor ENVIOU a oferta (UTC, com fuso).
+
+        É a referência da janela: o tempo do cliente (o `adb input tap` no
+        emulador) é comparado com este carimbo. Os dois vêm do MESMO relógio
+        (epoch UTC), então a comparação vale mesmo com o host em UTC-4 e o
+        Postgres em UTC.
+        """
+        rows = self.psql(
+            "SELECT EXTRACT(EPOCH FROM sent_at)::float "
+            "FROM offers ORDER BY sent_at DESC LIMIT 1")
+        if not rows:
+            return None
+        try:
+            return datetime.fromtimestamp(float(rows[0]), tz=timezone.utc)
+        except ValueError:
+            return None
+
     def payment_id(self, ride_id: str, method: str = "PIX") -> str:
         rows = self.psql(
             "SELECT id FROM payments WHERE ride_id = "
@@ -1142,6 +1390,55 @@ class DemoBackend:
         # responder) — aqui não há nada a checar antes do build.
         return None
 
+    def offer_window_s(self) -> float | None:
+        """Janela da oferta viva (timeout_at - sent_at), em segundos.
+
+        Mesma prova do backend real: a janela tem de ser a do contrato
+        (PRM-oferta.timeout = 15 s), e não a do relógio de ninguém.
+        """
+        status, payload = api(self.base, "GET", "/offers/mine")
+        if status != 200:
+            return None
+        offer = self._ultima_oferta(payload)
+        if offer is None:
+            return None
+        try:
+            sent = _iso(offer["sent_at"])
+            timeout_at = _iso(offer["timeout_at"])
+        except (KeyError, ValueError):
+            return None
+        return (timeout_at - sent).total_seconds()
+
+    def offer_sent_at(self) -> datetime | None:
+        """Quando o servidor ENVIOU a oferta (UTC, com fuso).
+
+        É a referência da janela: o instante do toque do harness é
+        comparado com este carimbo — os dois do mesmo relógio.
+        """
+        status, payload = api(self.base, "GET", "/offers/mine")
+        if status != 200:
+            return None
+        offer = self._ultima_oferta(payload)
+        if offer is None:
+            return None
+        try:
+            return _iso(offer["sent_at"])
+        except (KeyError, ValueError):
+            return None
+
+    @staticmethod
+    def _ultima_oferta(payload: dict) -> dict | None:
+        """A oferta mais recente do parceiro (a que está na tela)."""
+        offers = payload.get("offers") or []
+        vivas = [o for o in offers if o.get("status") in ("SENT", "PENDING", None)]
+        candidatas = vivas or offers
+        if not candidatas:
+            return None
+        try:
+            return max(candidatas, key=lambda o: _iso(o.get("sent_at")))
+        except (KeyError, ValueError):
+            return candidatas[0]
+
     def login(self, ui: Ui, package: str, done_text: str, email: str) -> None:
         print(f"  login {package} (demo)")
         ui.adb.launch(package)
@@ -1282,11 +1579,91 @@ def ensure_online(ui: Ui, backend) -> None:
         return
 
 
-def request_ride(ui: Ui) -> float:
+def assert_radar(ui: Ui, timeout: float = 45.0) -> str:
+    """Confere o radar do passageiro com **um** dump por tentativa.
+
+    Por que um dump só: cada `uiautomator dump` leva 2-5 s neste emulador e
+    a conferência é a única leitura antes do pedido. Fazer três buscas
+    separadas (contador positivo, "radar indisponível", "nenhum motorista")
+    gastava ~8 s à toa.
+
+    Onde esta conferência acontece: **antes** do pedido, na tela de destino.
+    Por quê: a oferta do parceiro vive 15 s (PRM-oferta.timeout) e uma leitura
+    de tela neste emulador custa 3-5 s (`uiautomator dump` + o mapa em
+    rasterização por software). Dentro da janela, o teste perdia a corrida
+    por lentidão do harness — não por defeito do produto. A tela de destino
+    mostra o mesmo contador ("N motoristas na região"), lido da MESMA
+    presença real (Edge Function `radar` no Postgres).
+
+    O que é exigido (o que a tela precisa provar):
+      * o contador **positivo** ("1 motorista na região") — `wait_text`
+        casava por substring e o texto NEGATIVO ("Nenhum motorista por
+        perto") fazia o E2E passar com o radar vazio;
+      * nada de "radar indisponível" (backend real sem `RADAR_BASE`);
+      * nada de "nenhum motorista na região" junto do contador positivo.
+    """
+    deadline = time.monotonic() + timeout
+    rx = re.compile(r"[1-9]\d*\s+motoristas?\s+na\s+regi", re.IGNORECASE)
+    while time.monotonic() < deadline:
+        try:
+            root = ui.dump(save_on_error=False)
+        except E2EFailure:
+            time.sleep(0.5)
+            continue
+        labels = [label for label, _x, _y, _ in ui.nodes(root)]
+        lower = [lbl.lower() for lbl in labels]
+        ui.remember_labels(root)
+        if any("radar indispon" in lbl for lbl in lower):
+            ui.shot("failure-radar-indisponivel")
+            raise E2EFailure(
+                "radar respondeu indisponível durante a busca — "
+                "com o backend real, `RADAR_BASE` tem de estar configurado"
+            )
+        achou = next((lbl for lbl in labels if rx.search(lbl)), None)
+        if achou:
+            if any("nenhum motorista na regi" in lbl for lbl in lower):
+                ui.shot("failure-radar-vazio")
+                raise E2EFailure(
+                    "radar respondeu 0 motoristas durante a busca"
+                )
+            print(f"    ok  radar -> {achou!r}")
+            return achou
+        time.sleep(0.5)
+    ui.shot("failure-radar-vazio")
+    raise E2EFailure(
+        f"timeout esperando o contador positivo do radar em {timeout:.0f}s"
+        f" — rótulos na tela: {ui.visible_summary()}"
+    )
+
+
+def request_ride(ui: Ui, backend) -> float:
     print("  passageiro: pedir corrida")
     ui.wait_text("Para onde?", exact=True, timeout=30)
     ui.shot("02-passageiro-home")
+    # Invariante do produto: enquanto o parceiro está online, a presença no
+    # Postgres tem de estar FRESCA (o servidor só mostra quem deu sinal de
+    # vida nos últimos 90 s). Se a idade passou disso, o passageiro vai ver
+    # "nenhum motorista" — e a causa está no parceiro, não no passageiro.
+    if isinstance(backend, RealBackend):
+        age = backend.presence_age_s()
+        print(f"    idade da presença do parceiro: {age if age is None else round(age, 1)}s")
+        if age is None or age > 90:
+            ui.shot("failure-presenca-velha")
+            raise E2EFailure(
+                "a presença do parceiro no Postgres está velha "
+                f"({age if age is None else round(age, 1)}s > 90s): "
+                "o heartbeat não está batendo com o app em segundo plano"
+            )
     ui.tap_and_wait("Para onde?", "Confirmar destino", timeout=45)
+    # O radar é requisito do fluxo e tem de mostrar MOTORISTA DE VERDADE.
+    #
+    # A conferência é ANTES do pedido (tela de destino): a oferta do parceiro
+    # vive 15 s (PRM-oferta.timeout) e uma leitura de tela custa 3-5 s neste
+    # emulador. Dentro da janela, o teste perdia a corrida por lentidão do
+    # harness — não por defeito do produto.
+    fix_geo(ui.adb)
+    assert_radar(ui, timeout=45)
+    ui.shot("02b-passageiro-radar")
     # Endereço real via geocoding do backend (Nominatim). A sugestão precisa
     # ser escolhida: o pedido não aceita mais destino genérico sem número.
     ui.tap_edit()
@@ -1299,6 +1676,11 @@ def request_ride(ui: Ui) -> float:
     ui.type_text("1234")  # campo do diálogo entra focado (autofocus)
     ui.tap_and_wait("Confirmar", "Confirmar destino", timeout=20)
     ui.wait_text("Chamar", timeout=20)
+    # O teclado precisa estar fechado: com ele aberto a tela perde ~40% da
+    # altura, o card de cotação sai da área visível e o `uiautomator` (que
+    # só enxerga o que está na tela) não acha o preço. O app já fecha o
+    # teclado quando o endereço fica completo — isto cobre o resto.
+    ui.dismiss_keyboard()
     # O valor que o passageiro está vendo agora — é contra ele que o
     # servidor vai conferir o preço cobrado no fim do fluxo.
     shown = ui.price_shown(timeout=10)
@@ -1309,25 +1691,66 @@ def request_ride(ui: Ui) -> float:
             f"— rótulos: {ui.visible_summary(limit=12)}"
         )
     print(f"    cotação na tela: R$ {shown:.2f}")
-    ui.tap_and_wait("Chamar", "Busca ativa", timeout=45)
-    # O radar é requisito do fluxo: com parceiro online ele TEM de responder
-    # (antes a URL duplicava /nearby e a tela anunciava "Radar indisponível").
-    ui.wait_text("motorista", timeout=30)
-    if ui.find("Radar indisponível", timeout=1) is not None:
-        ui.shot("failure-radar-indisponivel")
-        raise E2EFailure("radar respondeu indisponível durante a busca")
+    # GPS fresco na hora do pedido. O AVD só entrega um fix quando alguém
+    # manda (`adb emu geo fix`): sem isto, o `getCurrentPosition` do
+    # passageiro fica esperando um fix novo e a tela de busca só consulta o
+    # radar ~5 s depois do pedido — 5 s da janela de 15 s do parceiro,
+    # comidas por causa do GPS e não do produto.
+    fix_geo(ui.adb)
+    print(f"    [{_clock()}] toca em 'Chamar' (a corrida nasce aqui)")
+    ui.tap("Chamar", exact=True, timeout=15)
+    # Segundo fix: garante a entrega para quem já estava esperando.
+    fix_geo(ui.adb)
+    #
+    # DAQUI PARA A FRENTE A JANELA DA OFERTA ESTÁ CORRENDO (15 s no
+    # servidor). NENHUMA LEITURA DE TELA AQUI: um `uiautomator dump` custa
+    # 3-5 s neste emulador e comia a janela inteira — o teste perdia a
+    # corrida por lentidão do harness, não por defeito do produto.
+    # A captura de tela é rápida (0,5 s) e serve de evidência; a espera
+    # de 1 s é só para a navegação para a tela de busca acontecer.
+    time.sleep(1.0)
     ui.shot("03-passageiro-buscando")
+    print(f"    [{_clock()}] pedido feito; troca para o parceiro")
     return shown
 
 
 def accept_and_finish(ui: Ui, backend) -> None:
     print("  parceiro: oferta e corrida")
     ui.adb.launch(PARCEIRO)
+    print(f"    [{_clock()}] app do parceiro em primeiro plano")
     ui.wait_text("ACEITAR", exact=True, timeout=45)
+    print(f"    [{_clock()}] 'ACEITAR' visível — tocando")
+    # A janela da oferta é o `PRM-oferta.timeout` do contrato (15 s).
+    # Conferida no servidor (não no relógio do cliente): é a guarda contra a
+    # configuração da cidade divergir do SPEC — no banco local a janela
+    # estava em 60 s (4× mais espera para o passageiro) enquanto o SPEC, o
+    # seed e a API de demo dizem 15 s.
+    janela = backend.offer_window_s()
+    if janela is None or abs(janela - OFERTA_TIMEOUT_CONTRATO_S) > 0.5:
+        raise E2EFailure(
+            f"janela da oferta = {janela}s (contrato: "
+            f"{OFERTA_TIMEOUT_CONTRATO_S}s — PRM-oferta.timeout)"
+        )
+    print(f"    ok  janela da oferta: {janela}s (PRM-oferta.timeout)")
+    # Carimbo do servidor: quando a oferta FOI ENVIADA. O toque é
+    # comparado com ele — a prova de que o parceiro aceitou dentro da
+    # janela, sem depender do relógio do emulador (que pode estar adiantado
+    # ou atrasado em relação ao Postgres).
+    enviada_em = backend.offer_sent_at()
     # A oferta vive 15 s (janela do produto) e uma captura de tela neste
     # emulador leva vários segundos: o toque vem ANTES da foto, senão a
     # janela fecha antes do aceite ("Oferta perdida por tempo").
     ui.tap("ACEITAR", exact=True)
+    tocou_em = datetime.now(timezone.utc)
+    if enviada_em is not None:
+        idade = (tocou_em - enviada_em).total_seconds()
+        if idade > OFERTA_TIMEOUT_CONTRATO_S:
+            raise E2EFailure(
+                f"o toque em 'ACEITAR' saiu {idade:.1f}s depois do envio da "
+                f"oferta — a janela do contrato é {OFERTA_TIMEOUT_CONTRATO_S}s"
+            )
+        print(f"    ok  aceite dentro da janela: {idade:.1f}s de "
+              f"{OFERTA_TIMEOUT_CONTRATO_S}s (servidor)")
     ui.shot("04-parceiro-aceite")
     ui.wait_text("A CAMINHO", exact=True, timeout=35)
     ui.shot("05-parceiro-em-corrida")
@@ -1454,6 +1877,10 @@ def start_api(port: int, artifacts: Path) -> tuple[subprocess.Popen, object]:
     env = os.environ.copy()
     # Impede o aceite automático: este teste quer o parceiro real.
     env["DEMO_AUTO_ACCEPT_S"] = "600"
+    # Log linha-a-line do que o app pede. Sem isso o diagnóstico do ciclo da
+    # oferta (15 s de janela) fica no escuro: o `demo_api.log` tinha só a
+    # linha de arranque.
+    env["DEMO_LOG"] = "1"
     proc = subprocess.Popen(
         [sys.executable, "-u", "scripts/demo_api.py", "--port", str(port)],
         cwd=ROOT,
@@ -1512,6 +1939,8 @@ def main() -> int:
                         help="base da Edge Function 'rides' vista pelo emulador")
     parser.add_argument("--auth-base", default=DEFAULT_AUTH_BASE,
                         help="base do GoTrue vista pelo emulador")
+    parser.add_argument("--radar-base", default=DEFAULT_RADAR_BASE,
+                        help="base da Edge Function 'radar' (presença real)")
     parser.add_argument("--anon-key",
                         default=os.environ.get("AUTH_ANON_KEY",
                                                DEFAULT_ANON_KEY),
@@ -1582,14 +2011,15 @@ def main() -> int:
         )
 
     if args.backend == "real":
-        # O ciclo de corrida e o acesso vão para o stack real; o que ainda não
-        # migrou (radar do passageiro, geocoding, perfil) fica na API de demo,
-        # que sobe como no roteiro de sempre.
+        # O ciclo de corrida, o acesso e a presença vão para o stack real; o
+        # que ainda não migrou (perfil, passe, carteira, geocoding) fica na
+        # API de demo, que sobe como no roteiro de sempre.
         backend = RealBackend(
             device_api_base=device_base,
             stack_base=args.stack_base,
             device_rides_base=args.rides_base,
             device_auth_base=args.auth_base,
+            device_radar_base=args.radar_base,
             anon_key=args.anon_key,
             mail_base=args.mail_base,
             psp_secret=args.psp_secret,
@@ -1744,7 +2174,7 @@ def run_attempt(args, artifacts: Path, tools: dict, need_build: bool) -> dict:
 
         print("\n== passageiro: login e pedido")
         backend.login(ui, PASSAGEIRO, "Para onde?", LOGIN_PASSAGEIRO)
-        shown = request_ride(ui)
+        shown = request_ride(ui, backend)
 
         print("\n== parceiro: aceite e transições")
         accept_and_finish(ui, backend)
