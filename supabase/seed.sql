@@ -40,6 +40,35 @@ WHERE NOT EXISTS (
      AND cc.param_key = c.k
 );
 
+-- Reconcilia o valor da cidade piloto com o deste arquivo (que é o contrato:
+-- SPECS §1.1). O INSERT acima só põe o que FALTA — sem este UPDATE, um
+-- valor antigo continuava valendo para sempre, e foi assim que a janela da
+-- oferta ficou em 60 s no banco local enquanto o SPEC, o seed e a API de
+-- demonstração diziam 15 s (o passageiro esperava 4× mais por um motorista
+-- que talvez nunca visse a oferta).
+--
+-- Só a linha que o `city_config_current` enxerga (a mais recente em vigor).
+UPDATE city_configs cc
+   SET param_value = v.param_value
+  FROM (VALUES
+    ('PRM-oferta.timeout', '15'::jsonb),
+    ('PRM-match.r0',       '2'::jsonb),
+    ('PRM-match.passo',    '1'::jsonb),
+    ('PRM-match.rmax',     '8'::jsonb),
+    ('PRM-hb.intervalo',   '30'::jsonb),
+    ('PRM-comissao.pct',   '12'::jsonb),
+    ('PRM-passe.preco',    '10'::jsonb)
+  ) AS v(param_key, param_value)
+ WHERE cc.city_id = '33333333-3333-4333-8333-333333333333'
+   AND cc.param_key = v.param_key
+   AND cc.valid_from = (
+        SELECT max(c2.valid_from)
+          FROM city_configs c2
+         WHERE c2.city_id = cc.city_id
+           AND c2.param_key = cc.param_key
+           AND now() >= c2.valid_from
+           AND (c2.valid_to IS NULL OR now() < c2.valid_to));
+
 -- --- contas de desenvolvimento ------------------------------------------------
 INSERT INTO users (id, phone_e164, role) VALUES
   ('11111111-1111-4111-8111-111111111111', '+5596990000001', 'PASSENGER'),

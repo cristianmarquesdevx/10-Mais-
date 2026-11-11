@@ -17,16 +17,22 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
 import random
 import statistics
 from dataclasses import dataclass, field
 
 # --- parâmetros PRM (SPECS §1; defaults documentados) ---------------------
-R0_KM = 2.0            # PRM-match.r0
-PASSO_KM = 1.0         # PRM-match.passo
-RMAX_KM = 8.0          # PRM-match.rmax
-ROUND_TIMEOUT_S = 15   # PRM-oferta.timeout
+# O contrato vive em `scripts/contract.py` (fonte única — ver
+# `scripts/test_contract.py`).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import contract  # noqa: E402
+
+R0_KM = contract.MATCH_R0_KM       # PRM-match.r0
+PASSO_KM = contract.MATCH_PASSO_KM  # PRM-match.passo
+RMAX_KM = contract.MATCH_RMAX_KM    # PRM-match.rmax
+ROUND_TIMEOUT_S = contract.OFERTA_TIMEOUT_S  # PRM-oferta.timeout
 N_OFFERS = 3           # leva simultânea limitada (SPECS §1.2)
 MAX_ROUNDS = int((RMAX_KM - R0_KM) / PASSO_KM) + 1  # 7 rodadas até rmax
 

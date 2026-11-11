@@ -13,6 +13,23 @@ R(0) = PRM-match.r0 (2 km); R(n+1) = R(n) + PRM-match.passo (1 km) ≤ PRM-match
 timeout de rodada = PRM-oferta.timeout (15 s)
 ```
 
+**A janela da oferta é um parâmetro por cidade, e a cidade piloto está
+trancada no valor do contrato.** O valor effective sai de
+`city_param(city_id, 'PRM-oferta.timeout', '15')` — ou seja, uma config
+divergente muda o tempo de espera do passageiro **sem aparecer no código**.
+Por isso o banco agora recusa, na hora de gravar, qualquer janela fora do
+contrato na cidade piloto (15 s) e fora da faixa combinada nas outras praças
+(10..60 s) — trigger `trg_city_config_window`
+(`supabase/migrations/20261110000400_oferta_timeout_contrato.sql`).
+
+> **O que aconteceu (10/11/2026):** o banco local tinha a janela em **60 s**
+> (desvio de uma seeding antiga que o `WHERE NOT EXISTS` do seed nunca
+> reconciliou) enquanto o SPEC, o `seed.sql` e a API de demonstração diziam
+> 15 s. O passageiro esperava 4× mais por um motorista que talvez nunca
+> visse a oferta. Agora o valor vive em `scripts/contract.py` (fonte única),
+> o seed reconcilia, o banco trava e o E2E confere a janela **no servidor**
+> (`timeout_at - sent_at`).
+
 Candidatos (SQL, indexado por GiST em `partner_presence.last_position`):
 
 ```sql
@@ -69,6 +86,27 @@ Desempate: maior `f(ociosidade)`, depois menor ETA. Reoferta: a cada rodada excl
 
 Mesmo algoritmo; candidatos filtrados por `service_type` compatível e `vehicles.category`; raio inicial menor (3 km) por coleta; `batching` opcional: aceitar 2ª coleta se desvio ≤ 30% e destino a ≤ 2 km do primeiro destino.
 
+### 1.5 Presença viva — o app do parceiro tem de continuar rodando
+
+O despacho só considera `last_heartbeat_at > now() - 90 s` (§1.1). Logo, **enquanto
+o parceiro está ONLINE, o app precisa continuar vivos** — não basta publicar a
+presença uma vez ao ficar online.
+
+| Camada | Regra |
+|---|---|
+| App | Heartbeat a cada **30 s** (`PRM-hb.intervalo`), publicando status + posição (`POST /radar/presence`). Folga: 3 batidas dentro da janela de 90 s. |
+| App | Ao voltar do segundo plano, **republica** a presença na hora (o app pode ter sido congelado e a presença ter vencido). |
+| Android | App em **primeiro plano** (`PresenceService`, tipo `location`) enquanto ONLINE: sem isso o sistema congela o processo em cache e o heartbeat para — o parceiro some do radar **sem aviso no painel**. |
+| Servidor | `stale_after = heartbeat + 90 s`: a presença expira sozinha se o app morrer (o estado nunca é "online eterno"). |
+
+> **Por que o serviço em primeiro plano e não só um timer:** medido no emulador
+> (10/11/2026), com o app do parceiro em segundo plano o Android suspendeu os
+> timers do Dart por ~1 min (o poll de ofertas parou 21:36:10 → 21:37:09 UTC) e
+> o passageiro, que só buscou 2 min depois, viu **0 motoristas** — com o
+> parceiro "online" no painel. O serviço em primeiro plano impede o
+> congelamento; o `START_NOT_STICKY` garante que a notificação "Você está
+> online" nunca sobreviva ao processo que a publicava.
+
 ## 2. Motor de preço
 
 ```
@@ -114,3 +152,18 @@ suavização: m_efetivo = 0.7 × m_anterior + 0.3 × m   (evita oscilação 1.0�
 2. `multiplicador` sempre dentro dos limites da cidade (property test).
 3. Toda cobrança passa por `max(piso, ...)`; nenhuma corrida concluída < piso (exceto teste).
 4. ETA é monotônico para a mesma fase (não "anda para trás" sem mudança de rota > limiar).
+5. **Presença viva (§1.5):** com o parceiro ONLINE, a idade do heartbeat no
+   Postgres é `< 90 s` — verificado pelo E2E antes do passageiro pedir a
+   corrida, e o passageiro tem de ver **"N motoristas na região"** (contador
+   positivo), nunca "Nenhum motorista". A conferência acontece na
+   tela de **destino**, antes do pedido: a oferta do parceiro vive 15 s
+   (§1.1) e uma leitura de tela no emulador custa 3-5 s — medir dentro da
+   janela produzia falso negativo de infraestrutura, não de produto. O
+   contador é o mesmo dado (presença real no Postgres) e **viaja com o
+   pedido** para a tela de busca, que abre já com o número na tela.
+6. **Janela da oferta (§1.1):** `offers.timeout_at - offers.sent_at` é
+   **15 s** na cidade piloto — conferido no servidor pelo E2E (não no
+   relógio do cliente) e travado no banco (trigger
+   `trg_city_config_window`). O mesmo valor vive em `scripts/contract.py`
+   (`OFERTA_TIMEOUT_S`) e é conferido contra o SQL e o SPEC por
+   `scripts/test_contract.py`.

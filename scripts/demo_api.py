@@ -38,6 +38,12 @@ import urllib.parse
 import urllib.request
 from urllib.parse import urlparse, parse_qs
 
+# O contrato do produto (SPECS §1.1/§1.5) em um lugar só. O script é
+# executado como `python scripts/demo_api.py`, então o diretório dele já
+# está no sys.path; o import explícito cobre o caso de rodar de outro cwd.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import contract  # noqa: E402
+
 try:  # rodando como script (scripts/ no sys.path) ou como pacote
     import dispatch as dispatch_engine
     from dispatch import Candidate
@@ -74,6 +80,22 @@ def iso(ts: float | None = None) -> str:
 
 def new_id() -> str:
     return str(uuid.uuid4())
+
+# --- rastro de diagnóstico (DEMO_LOG=1) -------------------------------------
+# O ciclo da oferta tem 15 s de janela (PRM-oferta.timeout). Quando o teste
+# falha "timeout esperando 'ACEITAR'", a pergunta é sempre a mesma: a oferta
+# chegou ao parceiro? quanto tempo ela viveu? quem a consumiu? O rastro
+# responde isso com carimbo de tempo — sem ele, o log só mostra o sintoma.
+_TRACE_T0 = time.time()
+
+
+def trace(event: str, **fields) -> None:
+    """Escreve uma linha de rastro com tempo relativo (DEMO_LOG=1)."""
+    if not os.environ.get("DEMO_LOG"):
+        return
+    elapsed = now() - _TRACE_T0
+    extra = " ".join(f"{k}={v}" for k, v in fields.items())
+    print(f"[{elapsed:8.3f}s] {event} {extra}".rstrip(), file=sys.stderr, flush=True)
 
 def scratch_ticket_view(ticket: dict) -> dict:
     """Ticket no formato consumido por ScratchTicket.fromJson (3.8)."""
@@ -637,8 +659,12 @@ def _partner_start(origin_lat: float, origin_lon: float,
 # ---------------------------------------------------------------------------
 
 DRIVER_DEFAULT = "self"
-PRESENCE_FRESH_S = 90      # heartbeat 30 s + tolerância (igual ao radar)
-OFFER_TIMEOUT_S = 15       # PRM-oferta.timeout
+# O contrato (SPECS §1.1/§1.5) mora em `scripts/contract.py` — aqui só o
+# ponteiro. Ver `scripts/test_contract.py`: os valores do SQL, do SPEC e do
+# código têm que continuar o mesmo (foi a divergência entre eles que deixou
+# a janela da oferta em 60 s no banco local).
+PRESENCE_FRESH_S = contract.PRESENCE_FRESH_S   # heartbeat 30 s + tolerância
+OFFER_TIMEOUT_S = contract.OFERTA_TIMEOUT_S    # PRM-oferta.timeout
 # Desempenho: a semana é contada no fuso da praça (Porto Velho, UTC-4 e sem
 # horário de verão). "Hoje" no painel do motorista tem de ser o dia dele, não
 # o dia UTC — senão a noite cai no dia seguinte.
@@ -980,6 +1006,11 @@ def _offer_view(o: dict) -> dict:
         "passenger_rating": o.get("passenger_rating"),
         "dispatch": dispatch,
         "timeout_at": iso(o["timeout_at"]),
+        # `sent_at` no mesmo formato do backend real (api_offers_mine): é o
+        # que permite conferir a JANELA da oferta (timeout_at - sent_at) sem
+        # depender do relógio do cliente — a única forma de provar que a
+        # janela é a do contrato (PRM-oferta.timeout = 15 s).
+        "sent_at": iso(o["sent_at"]),
     }
 
 
@@ -1049,6 +1080,8 @@ def _expire_offers() -> None:
         if o["status"] != "SENT" or now() <= o["timeout_at"]:
             continue
         did = o.get("driver_id", DRIVER_DEFAULT)
+        trace("OFERTA_VENCIDA", ride=o["ride_id"][:8], offer=o["id"][:8],
+              driver=did, vida_s=round(now() - o["sent_at"], 1))
         if (STATE["presences"].get(did) or {}).get("status") == "OFERTA_PENDENTE":
             _set_presence_status(did, "ONLINE_DISPONIVEL")
         _close_offer(o, "EXPIRED", penalize=True)
@@ -1142,6 +1175,8 @@ def _dispatch_next(r: dict) -> dict | None:
     r["offered_at"] = now()
     _perf_track(did, "offers")
     _set_presence_status(did, "OFERTA_PENDENTE")
+    trace("OFERTA_CRIADA", ride=r["id"][:8], offer=oid[:8], driver=did,
+          ride_status=r["status"], timeout_at=f"{OFFER_TIMEOUT_S}s")
     return STATE["offers"][oid]
 
 
@@ -1270,6 +1305,8 @@ def _route(method: str, path: str, query: dict, body: dict,
             "accepted_at": None, "last_phase_at": now(),
             "cash_declared": False,
         }
+        trace("CORRIDA_CRIADA", ride=rid[:8], status="BUSCANDO",
+              quote=(quote_used or "-")[:8], preco=fare_snapshot)
         return 201, {}
 
     if method == "GET" and path == "/rides":
@@ -1665,6 +1702,8 @@ def _route(method: str, path: str, query: dict, body: dict,
             # Marcador do crédito de tempo online (desempenho semanal).
             "online_credit_at": ts,
         }
+        trace("PRESENCA_ONLINE", driver=did, status="ONLINE_DISPONIVEL",
+              lat=lat, lon=lon)
         return 200, {"mode": STATE["mode"], "pass_expires_at": STATE["pass_expires_at"]}
 
     if method == "POST" and path == "/partner/offline":
@@ -1690,6 +1729,8 @@ def _route(method: str, path: str, query: dict, body: dict,
                     # uma viagem em andamento).
                     if pres.get("status") not in ("EM_CORRIDA", "EM_ENTREGA"):
                         pres["status"] = "ONLINE_DISPONIVEL"
+                    trace("PRESENCA_HEARTBEAT", driver=did,
+                          status=pres.get("status"))
         return 200, {}
 
     # --- parceiro: ofertas ---
@@ -1702,6 +1743,10 @@ def _route(method: str, path: str, query: dict, body: dict,
              if o["status"] == "SENT"
              and o.get("driver_id", DRIVER_DEFAULT) == did),  # type: ignore[arg-type]
             key=lambda o: o["sent_at"])
+        trace("OFFERS_MINE", driver=did, abertas=len(open_offers),
+              ride=open_offers[0]["ride_id"][:8] if open_offers else "-",
+              faltam_s=(round(open_offers[0]["timeout_at"] - now(), 1)
+                        if open_offers else "-"))
         return 200, {"offers": [_offer_view(o) for o in open_offers]}
 
     # Fechamento de uma oferta que já saiu de /offers/mine (timeout): o app
@@ -1993,8 +2038,7 @@ class Handler(BaseHTTPRequestHandler):
         # Acesso fica silencioso por padrão; DEMO_LOG=1 mostra o que o app
         # realmente pediu (depurar presença/oferta sem ler o código do app).
         if os.environ.get("DEMO_LOG"):
-            print(f"{method} {parsed.path} -> {status}", file=sys.stderr,
-                  flush=True)
+            trace("REQ", m=method, p=parsed.path, status=status)
         self._send(status, payload)
 
 def _geocode(query: str) -> tuple[int, dict]:

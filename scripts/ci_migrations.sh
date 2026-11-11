@@ -134,4 +134,26 @@ sum=$(psql_c -Atc "SELECT to_char(COALESCE(SUM(CASE WHEN direction='C' THEN amou
                      FROM ledger_entries" | tail -1)
 [ "$sum" = "0.00" ] || fail "ledger soma $sum (esperado 0.00)"
 
+# 6) A janela da oferta fica presa ao contrato (15 s na cidade piloto).
+#
+# Teste FUNCIONAL, não grep: a trava é um trigger, e o que importa é que
+# uma config divergente seja recusada na hora de gravar. Foi assim que o
+# banco local ficou com a janela em 60 s (4× mais espera para o passageiro)
+# enquanto o SPEC, o seed e a API de demonstração diziam 15 s.
+psql_c -Atc "INSERT INTO cities (id, name, uf, status, timezone)
+             VALUES ('99999999-9999-4999-8999-999999999999', 'Cidade do Teste',
+                     'RO', 'PILOT', 'America/Porto_Velho')" >/dev/null
+psql_c -Atc "INSERT INTO city_configs (city_id, param_key, param_value, valid_from)
+             VALUES ('99999999-9999-4999-8999-999999999999',
+                     'PRM-oferta.timeout', '15'::jsonb, now())" >/dev/null
+if psql_c -Atc "UPDATE city_configs SET param_value = '60'::jsonb
+                WHERE city_id = '99999999-9999-4999-8999-999999999999'
+                  AND param_key = 'PRM-oferta.timeout'" >/dev/null 2>&1; then
+  fail "a janela da oferta aceitou 60 s na cidade piloto (contrato: 15 s)"
+fi
+janela=$(psql_c -Atc "SELECT param_value FROM city_config_current
+                       WHERE city_id = '99999999-9999-4999-8999-999999999999'
+                         AND param_key = 'PRM-oferta.timeout'" | tail -1)
+[ "$janela" = "15" ] || fail "janela da oferta na cidade piloto = $janela (esperado 15)"
+
 say "TODOS OS ASSERTS OK — cadeia de deploy aplicou do zero ($count migrations)"
