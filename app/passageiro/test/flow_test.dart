@@ -97,7 +97,12 @@ Future<void> pickFirstSuggestion(WidgetTester tester) async {
         routes: {
           '/destino': (_) =>
               const DestinoScreen(location: _NoLocation()),
-          '/fila': (_) => const FilaScreen(location: _NoLocation()),
+          // Radar de teste (sem rede): a fila aberta pela rota usa o mesmo
+          // mock do resto da suíte.
+          '/fila': (_) => FilaScreen(
+                location: const _NoLocation(),
+                radar: _radarDeTeste(drivers: 2),
+              ),
           '/historico': (_) => const HistoricoScreen(),
           '/pagamento': (_) => const PagamentoScreen(),
           '/avaliar': (_) => const AvaliarScreen(),
@@ -108,6 +113,50 @@ Future<void> pickFirstSuggestion(WidgetTester tester) async {
     ride: ride,
   );
 }
+
+/// Radar de teste: [drivers] motoristas reais (contador positivo) vindos do
+/// backend. Serve à prova da varredura (C4b/C4c/C4d).
+RadarApi _radarDeTeste({int drivers = 2}) {
+  final lista = <Map<String, dynamic>>[
+    for (var i = 0; i < drivers; i++)
+      {
+        'driver_id': 'p_$i',
+        'lat': -8.761 - i * 0.003,
+        'lon': -63.904 + i * 0.002,
+        'distance_km': 0.4 + i * 0.8,
+        'vehicle': 'Moto',
+        'available': true,
+      },
+  ];
+  return RadarApi(
+    baseUrl: 'http://test.local/partners',
+    token: '',
+    client: MockClient((req) async => http.Response(
+          jsonEncode({
+            'drivers': lista,
+            'eligible_count': drivers,
+            'radius_km': 3,
+            'generated_at': '2026-10-25T12:00:00Z',
+          }),
+          200,
+          headers: const {'content-type': 'application/json; charset=utf-8'},
+        )),
+  );
+}
+
+/// Corrida em BUSCANDO (a fase em que o radar aparece).
+Ride _corridaBuscando() => Ride(
+      rideId: 'r1',
+      status: RideStatus.buscando,
+      fareTotal: 12.5,
+      distanceKm: 1.2,
+      origin: const GeoPoint(-8.7607, -63.9039),
+      destination: const GeoPoint(-8.7647, -63.8969),
+      originAddress: 'Centro, 100',
+      destinationAddress: 'Aeroporto, 248',
+      paymentStatus: 'NOT_DUE',
+      createdAt: DateTime.utc(2026, 10, 25),
+    );
 
 void main() {
   testWidgets('C1 → C2 → chamar monta POST /rides válido', (tester) async {
@@ -672,6 +721,219 @@ void main() {
         reason: 'o centro do radar está sobre o mapa');
 
     // Descarta a tela: encerra timers/ticker do radar.
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets(
+      'C4b radar: a varredura PARA quando o aparelho pede "sem animação"',
+      (tester) async {
+    // Por que este teste existe: a varredura do radar repinta a tela 15× por
+    // segundo. Quem liga "remover animações" nas configurações de
+    // acessibilidade não pode receber isso — e, no teste de ponta a ponta,
+    // uma tela que nunca fica parada faz o `uiautomator` esperar o tempo de
+    // idle do sistema (≈9 s por leitura), comendo a janela de 15 s da
+    // oferta do parceiro.
+    //
+    // O radar de teste vem VAZIO de propósito: sem motorista na região a
+    // varredura é a única coisa se movendo na tela.
+    final (widget: app, ride: controller) = buildApp(
+      home: FilaScreen(
+        location: const _NoLocation(),
+        radar: _radarDeTeste(drivers: 0),
+      ),
+    );
+    controller.ride = _corridaBuscando();
+
+    // O `MediaQuery` que a app real recebe da preferência de acessibilidade
+    // do sistema (aqui, injetado no mesmo ponto da árvore).
+    await tester.pumpWidget(Builder(
+      builder: (context) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: true),
+        child: app,
+      ),
+    ));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    expect(find.text('Nenhum motorista na região'), findsOneWidget);
+
+    // Um segundo de tela: o feixe do radar não pode ter andado.
+    await tester.pump(const Duration(seconds: 1));
+    final hud = tester.widget<RadarHud>(find.byType(RadarHud));
+    expect(hud.progress, 0.0,
+        reason: 'com "remover animações" a varredura não pode repintar a tela');
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets('C4c radar: com animação, a varredura anda (prova do C4b)',
+      (tester) async {
+    final (widget: app, ride: controller) = buildApp(
+      home: FilaScreen(
+        location: const _NoLocation(),
+        radar: _radarDeTeste(drivers: 0),
+      ),
+    );
+    controller.ride = _corridaBuscando();
+
+    await tester.pumpWidget(app);
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    expect(find.text('Nenhum motorista na região'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 1));
+    final hud = tester.widget<RadarHud>(find.byType(RadarHud));
+    expect(hud.progress, greaterThan(0.0),
+        reason: 'sem "remover animações" o feixe do radar gira');
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets('C4d radar: com motorista na região, a tela fica calma',
+      (tester) async {
+    // O feixe varrendo a área não informa nada quando já há motorista na
+    // região (o pino e o contador dizem) — só gasta bateria repintando a
+    // tela 15× por segundo. A varredura para nesse caso.
+    final (widget: app, ride: controller) = buildApp(
+      home: FilaScreen(
+        location: const _NoLocation(),
+        radar: _radarDeTeste(drivers: 2),
+      ),
+    );
+    controller.ride = _corridaBuscando();
+
+    await tester.pumpWidget(app);
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    expect(find.text('2 motoristas na região'), findsOneWidget);
+
+    // A varredura CONGELA (o feixe fica onde estava): um segundo de tela
+    // não pode mover o radar.
+    final antes = tester.widget<RadarHud>(find.byType(RadarHud)).progress;
+    await tester.pump(const Duration(seconds: 1));
+    final depois = tester.widget<RadarHud>(find.byType(RadarHud)).progress;
+    expect(depois, antes,
+        reason: 'com motorista na região o feixe não precisa varrer');
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets(
+      'C8 destino: o passageiro vê quantos parceiros REAIS estão perto',
+      (tester) async {
+    // O radar é lido ANTES do pedido: o passageiro decide com o número na
+    // tela ("há motorista por perto?"), e o dado viaja com o pedido para a
+    // tela de busca. Sem backend, a tela diz "radar indisponível" — nunca
+    // motorista inventado.
+    final (widget: app, ride: controller) = buildApp(
+      home: DestinoScreen(
+        location: const _NoLocation(),
+        radar: _radarDeTeste(drivers: 2),
+      ),
+    );
+
+    await tester.pumpWidget(app);
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    expect(find.text('2 motoristas na região'), findsOneWidget);
+    expect(find.text('Radar indisponível nesta versão'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets(
+      'C8b destino: sem radar configurado, a tela avisa (nada de motorista '
+      'inventado)', (tester) async {
+    final (widget: app, ride: controller) = buildApp(
+      home: DestinoScreen(
+        location: const _NoLocation(),
+        radar: RadarApi(baseUrl: ''),
+      ),
+    );
+
+    await tester.pumpWidget(app);
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    expect(find.text('Radar indisponível nesta versão'), findsOneWidget);
+    expect(find.textContaining('motorista na região'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets('C9 fila: abre com o contador que o destino já leu',
+      (tester) async {
+    // O snapshot viaja nos argumentos da rota '/fila': a tela de busca mostra
+    // o número desde o primeiro quadro (sem "consultando…" e sem piscar).
+    final snapshot = RadarSnapshot(
+      drivers: const [],
+      eligibleCount: 2,
+      radiusKm: 3,
+      generatedAt: DateTime.utc(2026, 10, 25),
+    );
+    final (widget: app, ride: controller) = buildApp();
+    controller.ride = _corridaBuscando();
+
+    await tester.pumpWidget(app);
+    tester
+        .state<NavigatorState>(find.byType(Navigator))
+        .pushNamed('/fila', arguments: snapshot);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('2 motoristas na região'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets('C10 destino: endereço completo fecha o teclado (o preço '
+      'fica visível)', (tester) async {
+    // Com o teclado aberto, a tela perde ~40% da altura e o card de cotação
+    // sai da área visível: o passageiro acabaria chamando SEM ver o preço
+    // (foi o que travou o E2E). Endereço escolhido = teclado fechado.
+    final (widget: app, ride: controller) = buildApp(
+      home: const DestinoScreen(location: _NoLocation()),
+      mock: MockClient((req) async {
+        if (req.url.path.endsWith('/geocode')) {
+          return geocodeFound('Avenida Amazonas', number: '248');
+        }
+        if (req.url.path.endsWith('/quote')) {
+          return http.Response(
+              '{"fare_total":12.5,"expires_in":90,"currency":"BRL"}', 200);
+        }
+        return http.Response('{}', 200);
+      }),
+    );
+
+    await tester.pumpWidget(app);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byType(TextField).first);
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).first, 'Avenida Amazonas');
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+
+    // A sugestão aparece e o usuário escolhe.
+    expect(find.byType(ListTile), findsWidgets);
+    await tester.tap(find.byType(ListTile).first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // Endereço completo: o campo perdeu o foco (o teclado fecha).
+    final editable = tester.widget<EditableText>(find.byType(EditableText).first);
+    expect(editable.focusNode.hasFocus, isFalse,
+        reason: 'endereço escolhido → o teclado fecha (o preço fica visível)');
+    expect(tester.testTextInput.isVisible, isFalse);
+
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
   });

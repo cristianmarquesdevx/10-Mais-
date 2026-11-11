@@ -11,10 +11,22 @@ const _apiBase = String.fromEnvironment(
   defaultValue: 'http://10.0.2.2:8787',
 );
 
-const defaultRadarBase = String.fromEnvironment(
-  'RADAR_BASE',
-  defaultValue: '$_apiBase/partners',
-);
+/// Base do radar de **demonstração**: a API de demo servindo
+/// `/partners/nearby` (motoristas sintéticos).
+///
+/// Só vale no modo demo. Com o backend real ligado, mostrar motorista
+/// sintético seria mentira — lá o radar é o do Postgres (`RADAR_BASE`) e,
+/// sem ele, a tela diz "radar indisponível".
+const demoRadarBase = '$_apiBase/partners';
+
+/// Base do radar REAL (Edge Function `radar` — Postgres).
+///
+/// **Vazio = sem radar real**: o app não tem onde buscar motorista de
+/// verdade. O build de piloto define `RADAR_BASE`.
+const envRadarBase = String.fromEnvironment('RADAR_BASE', defaultValue: '');
+
+/// Base usada quando nada é injetado: a de demonstração.
+const defaultRadarBase = demoRadarBase;
 
 /// JWT do usuário (mesmo token do login). No backend da demo a sessão já
 /// identifica o passageiro; em produção a Edge Function exige o token.
@@ -69,19 +81,32 @@ class RadarApi {
   RadarApi({
     this.baseUrl = defaultRadarBase,
     this.token = defaultRadarToken,
+    FutureOr<String> Function()? tokenProvider,
     http.Client? client,
     this.timeout = const Duration(seconds: 7),
-  }) : _client = client ?? http.Client();
+  })  : _tokenProvider = tokenProvider,
+        _client = client ?? http.Client();
 
   final String baseUrl;
   final String token;
   final Duration timeout;
   final http.Client _client;
 
+  /// Fornecedor do token da sessão. É assíncrono porque o serviço de auth
+  /// renova a sessão quando o token está perto de vencer — o radar real
+  /// (`radar` no Postgres) exige o JWT do passageiro.
+  final FutureOr<String> Function()? _tokenProvider;
+
   /// O radar existe com backend configurado. O token é opcional porque o
   /// backend do app já autentica a sessão; a Edge Function dedicada usa
   /// `RADAR_TOKEN` quando presente.
   bool get configured => baseUrl.isNotEmpty;
+
+  Future<String> _bearer() async {
+    final provider = _tokenProvider;
+    if (provider != null) return await provider();
+    return token;
+  }
 
   Future<RadarSnapshot> nearby({
     required double lat,
@@ -104,8 +129,9 @@ class RadarApi {
       'lon': lon.toString(),
       'radius_km': radiusKm.toString(),
     });
+    final bearer = await _bearer();
     final res = await _client.get(uri, headers: {
-      if (token.isNotEmpty) 'authorization': 'Bearer $token',
+      if (bearer.isNotEmpty) 'authorization': 'Bearer $bearer',
       'accept': 'application/json',
     }).timeout(timeout);
 

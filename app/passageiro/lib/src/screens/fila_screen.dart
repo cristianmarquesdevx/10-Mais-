@@ -10,6 +10,7 @@ import '../api/radar_api.dart';
 import '../location/location_service.dart';
 import '../theme/theme.dart';
 import '../widgets/driver_radar.dart';
+import '../widgets/map_note.dart';
 import '../widgets/radar_hud.dart';
 
 /// C4 Fila (BUSCANDO) — mapa + radar de motoristas REAIS.
@@ -19,11 +20,23 @@ import '../widgets/radar_hud.dart';
 /// configurado, sem permissão de GPS ou sem parceiro online, a tela diz isso —
 /// nunca desenha motorista sintético.
 class FilaScreen extends StatefulWidget {
-  const FilaScreen({super.key, this.location = const LocationService(), this.radar});
+  const FilaScreen({
+    super.key,
+    this.location = const LocationService(),
+    this.radar,
+    this.initialSnapshot,
+  });
 
   /// Injetável para teste (sem plugin de plataforma).
   final LocationService location;
   final RadarApi? radar;
+
+  /// Contador depresence que a tela de destino já leu.
+  ///
+  /// A busca abre com o número na tela: o passageiro não vê "consultando
+  /// motoristas" quando o dado já está no servidor. Sem este snapshot, a tela
+  /// busca sozinha (é o caminho quando a fila é aberta por outro motivo).
+  final RadarSnapshot? initialSnapshot;
 
   @override
   State<FilaScreen> createState() => _FilaScreenState();
@@ -113,23 +126,49 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Contador que a tela de destino já leu: a fila abre com o número na
+    // tela (o passageiro não vê "consultando…" quando o dado já existe).
+    // O snapshot vem pelos argumentos da rota '/fila'.
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is RadarSnapshot && _snapshot == null) _snapshot = args;
+    final inicial = widget.initialSnapshot;
+    if (inicial != null && _snapshot == null) _snapshot = inicial;
+    if (_located) return;
+    _located = true;
+    _locate();
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final foreground = state == AppLifecycleState.resumed;
     if (foreground == _foreground || !mounted) return;
     setState(() => _foreground = foreground);
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_located) return;
-    _located = true;
-    _locate();
-  }
-
   Future<void> _locate() async {
     if (mounted) setState(() => _locating = true);
     final ride = AppScope.of(context).ride;
+
+    // O GPS do aparelho pode demorar vários segundos (fix frio, permissão,
+    // sinal fraco). Mas o ponto de EMBARQUE do pedido já é conhecido — o
+    // passageiro acabou de escolher o endereço. O radar consulta em volta
+    // dele agora, e o fix do GPS só refina o centro depois.
+    //
+    // Antes, a tela esperava o GPS para só então mostrar o radar: o
+    // passageiro via "procurando motorista por perto..." sem nenhum dado
+    // durante ~6 s, e cada segundo de espera é um segundo da janela de 15 s
+    // da oferta do outro lado.
+    final origin = ride?.origin;
+    if (origin != null) {
+      setState(() {
+        _center = LatLng(origin.lat, origin.lon);
+        _centerFromRide = true;
+      });
+      await _refreshRadar();
+    }
+
     try {
       final fix = await widget.location.current();
       if (!mounted) return;
@@ -143,7 +182,6 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
       await _refreshRadar();
     } on LocationException catch (e) {
       if (!mounted) return;
-      final origin = ride?.origin;
       setState(() {
         _locationFailure = e.failure;
         _locating = false;
@@ -257,15 +295,18 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
   String get _statusTitle {
     if (_locating) return 'Obtendo sua localização…';
     if (_center == null) return 'Ative a localização para buscar motoristas';
+    // A corrida vem primeiro: depois do aceite o radar é secundário (o
+    // passageiro já tem o motorista) — um radar fora do ar não pode
+    // sobrescrever a mensagem "motorista a caminho".
+    final ride = AppScope.of(context).ride;
+    if (ride != null && !ride.status.isSearching) {
+      return 'Motorista a caminho — aguarde o embarque';
+    }
     if (_radarCode == 'radar_unconfigured') {
       return 'Radar indisponível nesta versão';
     }
     if (_radarCode != null) {
       return 'Sem conexão com o radar — tentando de novo…';
-    }
-    final ride = AppScope.of(context).ride;
-    if (ride != null && !ride.status.isSearching) {
-      return 'Motorista a caminho — aguarde o embarque';
     }
     if (_snapshot == null) return 'Procurando motorista por perto...';
     if (_count == 0) return 'Nenhum motorista por perto agora';
@@ -279,6 +320,10 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
     }
     if (_centerFromRide) {
       return 'GPS indisponível — usando o embarque do pedido como referência.';
+    }
+    final ride = AppScope.of(context).ride;
+    if (ride != null && !ride.status.isSearching) {
+      return 'Acompanhe o trajeto e a chegada na tela de acompanhamento.';
     }
     if (_radarCode == 'radar_unconfigured') {
       return 'A busca real precisa do backend do radar configurado.';
@@ -406,7 +451,7 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
           const Positioned(
             left: 10,
             top: 10,
-            child: _MapNote(
+            child: MapNote(
               icon: Icons.location_searching_rounded,
               text: 'GPS indisponível · embarque do pedido',
             ),
@@ -427,7 +472,7 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
       // Abaixo da AppBar (o mapa cobre a tela toda): o chip do contador fica
       // no topo do mapa, longe do painel flutuante do rodapé.
       top: 66,
-      child: _MapNote(
+      child: MapNote(
         icon: hasData && _count > 0
             ? Icons.radar_rounded
             : Icons.info_outline_rounded,
@@ -450,10 +495,25 @@ class _FilaScreenState extends State<FilaScreen> with WidgetsBindingObserver {
     // A varredura só roda quando há radar real configurado: sem backend a
     // tela mostra o estado "indisponível" (e não uma animação decorativa que
     // também impediria testes de estabilizarem).
+    //
+    // E só roda se o aparelho **pediu** animações: quem liga "remover
+    // animações" nas configurações de acessibilidade não deve receber uma
+    // tela que repinta 15× por segundo. É também o que permite a um leitor
+    // de tela (e ao `uiautomator` do teste de ponta a ponta) ler o rótulo
+    // do contador: com a varredura ligada a tela nunca fica "parada" e a
+    // leitura esperava o tempo de idle do sistema (≈9 s por dump).
+    //
+    // E só roda enquanto o radar NÃO achou ninguém: quando há motorista na
+    // região, o feixe varrendo a área não informa nada (o pino e o contador
+    // já dizem) — só gasta bateria repintando a tela 15× por segundo. O
+    // passageiro fica com a tela calma e a informação que importa.
+    final semAnimacao = MediaQuery.disableAnimationsOf(context);
     final radarActive = isSearching &&
         _radar.configured &&
         _center != null &&
-        _foreground;
+        _foreground &&
+        !semAnimacao &&
+        _count == 0;
     _setSweep(radarActive);
 
     return PopScope(
@@ -771,56 +831,6 @@ class _FloatingStatus extends StatelessWidget {
             ),
         ],
       ),
-    );
-  }
-}
-
-/// Etiqueta discreta sobre o mapa (contador/aviso de GPS).
-class _MapNote extends StatelessWidget {
-  const _MapNote({
-    required this.icon,
-    required this.text,
-    this.alert = false,
-  });
-
-  final IconData icon;
-  final String text;
-  final bool alert;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = tokensOf(context);
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 240),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: t.surface.withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(AppSpace.radiusChip),
-        border: Border.all(color: t.hairline.withValues(alpha: 0.35)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.10),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 14, color: alert ? t.warning : t.primary),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: t.ink,
-            ),
-          ),
-        ),
-      ]),
     );
   }
 }

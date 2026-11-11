@@ -237,6 +237,10 @@ paths:
       description: >
         Positions are deliberately approximate (no exact address) to protect
         the partner's privacy. Used by the passenger queue/radar view.
+        DEMO ONLY: with the real backend the app reads
+        `GET /radar/nearby` (Edge Function `radar`, Postgres) — with
+        RADAR_BASE configured it never falls back to the synthetic drivers
+        of the demo API.
       parameters:
         - { name: lat, in: query, required: true, schema: { type: number, minimum: -90, maximum: 90 } }
         - { name: lon, in: query, required: true, schema: { type: number, minimum: -180, maximum: 180 } }
@@ -360,6 +364,13 @@ paths:
   /partner/online:
     post:
       summary: 'Go online (activates scheduled pass, A2); body: { lat, lon, accuracy }'
+      description: >
+        DEMO ONLY. The routes `/partner/online`, `/partner/offline`,
+        `/partner/heartbeat` and `/partner/break/*` belong to the demo API and
+        have no Edge Function yet. The REAL presence is published by
+        `POST /radar/presence` (Edge Function `radar`, Postgres) — that is
+        what the dispatch reads. The app uses the radar whenever RADAR_BASE
+        is configured and falls back to these routes only in demo mode.
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       responses:
         '200':
@@ -373,6 +384,62 @@ paths:
                   mode: { type: string, enum: [PASSE_ATIVO, COMISSAO] }
                   pass_expires_at: { type: string, format: date-time, nullable: true }
         '403': { $ref: '#/components/responses/Problem' }   # kyc not approved / blocked
+
+  /radar/presence:
+    post:
+      summary: Publish the partner's presence (REAL backend — Edge Function `radar`)
+      description: >
+        The partner's own presence in Postgres (`partner_presence`): the
+        source of truth for the dispatch (`ONLINE_DISPONIVEL` + heartbeat
+        fresher than 90 s = eligible for offers). Only the authenticated
+        partner can write their own row; a partner whose KYC is not approved
+        is refused with 403 `kyc_not_approved`. Served by its own Edge
+        Function (`/functions/v1/radar`), addressed BY ITS NAME.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [ONLINE_DISPONIVEL, PAUSA, OFFLINE] }
+                lat: { type: number, minimum: -90, maximum: 90 }
+                lon: { type: number, minimum: -180, maximum: 180 }
+      responses:
+        '200': { description: '{ status, updated_at, has_position }' }
+        '401': { $ref: '#/components/responses/Problem' }   # not_authenticated
+        '403': { $ref: '#/components/responses/Problem' }   # kyc_not_approved / not_a_partner
+        '422': { $ref: '#/components/responses/Problem' }   # invalid_position / invalid_status
+
+  /radar/nearby:
+    get:
+      summary: Drivers around a point (REAL backend — Edge Function `radar`)
+      description: >
+        The passenger's radar over the REAL presence: partners whose KYC is
+        approved, whose status is ONLINE_DISPONIVEL and whose heartbeat is
+        fresher than 90 s. Positions are snapped (~110 m) and the driver id is
+        a daily pseudonym — the passenger cannot track anybody. Served by the
+        Edge Function `radar` (`/functions/v1/radar/nearby`).
+      parameters:
+        - { name: lat, in: query, required: true, schema: { type: number, minimum: -90, maximum: 90 } }
+        - { name: lon, in: query, required: true, schema: { type: number, minimum: -180, maximum: 180 } }
+        - { name: radius_km, in: query, schema: { type: number, default: 5, minimum: 0.5, maximum: 20 } }
+      responses:
+        '200':
+          description: Nearby partner markers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [drivers]
+                properties:
+                  drivers:
+                    type: array
+                    items: { $ref: '#/components/schemas/NearbyDriver' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
   /partner/offline:
     post: { summary: Go offline, responses: { '200': { description: Ok } } }
   /partner/heartbeat:

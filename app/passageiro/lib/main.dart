@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'src/api/client.dart';
+import 'src/api/radar_api.dart';
 import 'src/auth/auth_service.dart';
 import 'src/screens/screens.dart';
 import 'src/state/ride_controller.dart';
@@ -12,9 +13,15 @@ import 'src/theme/theme.dart';
 /// Backends (tudo vem do ambiente de build — nunca hardcoded em release):
 ///
 ///   `API_BASE`      o que ainda não migrou (perfil, suporte, convites) —
-///                   em produção a mesma Edge Function; no piloto, a API de
-///                   demonstração.
+///                   em produção a mesma Edge Function (a URL dela, com o
+///                   prefixo `/functions/v1/v1`, vem no build); no piloto e
+///                   no dev, a API de demonstração (default `10.0.2.2:8787`,
+///                   que serve as rotas sem prefixo).
 ///   `RIDES_BASE`    o ciclo de corrida no Postgres (Edge Function `rides`).
+///   `RADAR_BASE`    o radar real (Edge Function `radar`: motoristas de
+///                   verdade, no Postgres). **Vazio = sem radar real** — e,
+///                   com o backend real ligado, a tela diz "radar
+///                   indisponível" em vez de desenhar motorista sintético.
 ///   `AUTH_BASE`     o GoTrue (Supabase Auth). Vazio = modo dev: sem
 ///                   servidor de acesso, o login aceita o OTP de 4 dígitos.
 ///   `AUTH_ANON_KEY` chave pública do projeto (não é segredo).
@@ -33,13 +40,14 @@ class _PassageiroAppState extends State<PassageiroApp> {
   late final AuthService? _auth;
   late final ApiClient _api;
   late final RideController _ride;
+  late final RadarApi _radar;
   bool _signedIn = false; // P1: tela de apresentação/login antes da home
 
   @override
   void initState() {
     super.initState();
     const apiBase = String.fromEnvironment('API_BASE',
-        defaultValue: 'http://10.0.2.2:8787/functions/v1/v1');
+        defaultValue: 'http://10.0.2.2:8787');
     // Vazio = modo demonstração: o ciclo de corrida fica na API de demo.
     // O build de piloto/piloto passa a URL real do Postgres.
     const ridesBase = String.fromEnvironment('RIDES_BASE', defaultValue: '');
@@ -50,6 +58,8 @@ class _PassageiroAppState extends State<PassageiroApp> {
         defaultValue: 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH');
     // Token de build: é o plano B para quando não há sessão (dev/testes).
     const buildToken = String.fromEnvironment('API_TOKEN', defaultValue: '');
+    // Base do radar real (Edge Function `radar`). Vazio = sem radar real.
+    const radarBase = String.fromEnvironment('RADAR_BASE', defaultValue: '');
 
     // AUTH_BASE vazio = modo dev: sem servidor de acesso o app não pede
     // código e não renova token (é o modo dos testes de layout).
@@ -63,6 +73,20 @@ class _PassageiroAppState extends State<PassageiroApp> {
       // O token da sessão manda; o do build é o plano B. A chamada é
       // assíncrona porque o serviço renova a sessão quando o token vence.
       accessToken: () async {
+        final session = await _auth?.accessToken();
+        return session ?? buildToken;
+      },
+    );
+    _radar = RadarApi(
+      // Com o backend real ligado, o radar é o do Postgres: sem RADAR_BASE
+      // não há onde buscar motorista de verdade — e melhor dizer isso na
+      // tela do que desenhar os synthetic da demo.
+      baseUrl: radarBase.isNotEmpty
+          ? radarBase
+          : (ridesBase.isEmpty ? demoRadarBase : ''),
+      // O radar real exige o JWT do passageiro (o Postgres identifica quem
+      // pergunta pelo token, não pelo corpo).
+      tokenProvider: () async {
         final session = await _auth?.accessToken();
         return session ?? buildToken;
       },
@@ -140,9 +164,11 @@ class _PassageiroAppState extends State<PassageiroApp> {
                   onDone: () => setState(() => _signedIn = true),
                 ),
           routes: {
-            '/destino': (_) => const DestinoScreen(),
+            '/destino': (_) => DestinoScreen(radar: _radar),
             '/negociar': (_) => const NegociarScreen(),
-            '/fila': (_) => const FilaScreen(),
+            // A tela de destino entrega o snapshot do radar pelos argumentos
+            // da rota: a fila abre já com o contador de motoristas.
+            '/fila': (_) => FilaScreen(radar: _radar),
             '/acompanhar': (_) => const AcompanharScreen(),
             '/viagem': (_) => const ViagemScreen(),
             '/pagamento': (_) => const PagamentoScreen(),

@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../api/client.dart';
+import '../api/radar_api.dart';
 import '../api/route_service.dart';
 import '../location/location_service.dart';
 import '../../main.dart';
 import '../theme/theme.dart';
+import '../widgets/map_note.dart';
 import '../widgets/route_map.dart';
 
 /// C2 Destino/Confirmar — solicitar em ≤ 3 toques:
@@ -18,6 +20,7 @@ class DestinoScreen extends StatefulWidget {
     this.initialDestination,
     this.initialLabel,
     this.location = const LocationService(),
+    this.radar,
   });
 
   /// "Repetir viagem": o destino da corrida antiga já entra escolhido, com o
@@ -27,6 +30,13 @@ class DestinoScreen extends StatefulWidget {
 
   /// Injetável para teste (sem plugin de plataforma).
   final LocationService location;
+
+  /// Radar de presença (motoristas REAIS perto do embarque).
+  ///
+  /// Injetável para teste; em produção é a Edge Function `radar` (o Postgres
+  /// como fonte da verdade). Vazio/não configurado = a tela diz "radar
+  /// indisponível" — nunca mostra motorista inventado.
+  final RadarApi? radar;
 
   @override
   State<DestinoScreen> createState() => _DestinoScreenState();
@@ -64,10 +74,73 @@ class _DestinoScreenState extends State<DestinoScreen> {
   Timer? _quoteTicker; // reconta a validade e re-cota quando expira
   bool _prefilled = false;
 
+  // --- radar de presença -----------------------------------------------------
+  //
+  // Quantos parceiros REAIS estão online perto do embarque. O dado vem do
+  // backend (`radar` no Postgres) — nunca é número inventado.
+  //
+  // Por que aqui, e não só na fila: o passageiro decide **antes** de chamar.
+  // "Chamar" com zero motorista na região é uma espera que podia ter sido
+  // evitada; e o dado viaja com o pedido (snapshot), então a tela de busca
+  // abre já com o contador — sem "consultando…" e sem piscar.
+  late final RadarApi _radar = widget.radar ?? RadarApi();
+  RadarSnapshot? _radarSnapshot;
+  String? _radarCode;
+  /// Começa carregando: a primeira leitura acontece já no `initState` (e o
+  /// `setState` de "carregando" viria no meio do build — melhor esperar).
+  bool _radarLoading = true;
+  Timer? _radarPoll;
+
+  /// Raio consultado — o mesmo da tela de busca (3 km).
+  static const _radarRadiusKm = 3.0;
+
   @override
   void initState() {
     super.initState();
     _loadOrigin();
+    _refreshRadar();
+    // O radar é vivo: a presença do parceiro muda (online/offline) enquanto a
+    // tela está aberta. 10 s é o suficiente e não martela o backend.
+    _radarPoll = Timer.periodic(const Duration(seconds: 10), (_) {
+      _refreshRadar();
+    });
+  }
+
+  /// Lê a presença real perto do embarque e guarda o snapshot.
+  ///
+  /// O snapshot vai junto para a tela de fila: assim o passageiro vê o
+  /// contador **imediatamente** ao entrar na busca.
+  Future<void> _refreshRadar() async {
+    if (!_radar.configured) {
+      if (mounted) setState(() => _radarCode = 'radar_unconfigured');
+      return;
+    }
+    if (mounted && !_radarLoading) setState(() => _radarLoading = true);
+    try {
+      final snap = await _radar.nearby(
+        lat: _origem.lat,
+        lon: _origem.lon,
+        radiusKm: _radarRadiusKm,
+      );
+      if (!mounted) return;
+      setState(() {
+        _radarSnapshot = snap;
+        _radarCode = null;
+        _radarLoading = false;
+      });
+    } on RadarProblem catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _radarCode = e.code;
+        _radarLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _radarCode = 'radar_error';
+        _radarLoading = false;
+      });
+    }
   }
 
   Future<void> _loadOrigin() async {
@@ -83,6 +156,9 @@ class _DestinoScreenState extends State<DestinoScreen> {
         _originLoading = false;
       });
       _refreshQuote();
+      // O centro do radar mudou com o GPS: relê a presença em volta do
+      // embarque real (e não do ponto padrão).
+      _refreshRadar();
     } on LocationException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -121,6 +197,7 @@ class _DestinoScreenState extends State<DestinoScreen> {
     _debounce?.cancel();
     _quoteDebounce?.cancel();
     _quoteTicker?.cancel();
+    _radarPoll?.cancel();
     _destino.dispose();
     super.dispose();
   }
@@ -218,6 +295,13 @@ class _DestinoScreenState extends State<DestinoScreen> {
       // Mostra via + número; o endereço completo vai no pedido.
       _destino.text = chosen.shortLabel;
     });
+    // O endereço está completo: o teclado fecha.
+    //
+    // Com o teclado aberto, a tela perde ~40% da altura e o card de cotação
+    // (e o botão "Chamar") ficam ABAIXO da dobra — o passageiro acabaria
+    // chamando sem ver o preço. Fechar o teclado devolve o formulário inteiro
+    // na tela: destino, cotação, modo de preço e o CTA.
+    FocusScope.of(context).unfocus();
     _refreshQuote(); // destino novo → preço do momento muda
   }
 
@@ -305,7 +389,9 @@ class _DestinoScreenState extends State<DestinoScreen> {
     setState(() => _sending = false);
     final code = ride.lastErrorCode;
     if (code == null) {
-      Navigator.pushNamed(context, '/fila');
+      // O snapshot do radar viaja com a fila: a tela de busca abre já com o
+      // contador de motoristas (sem "consultando…" e sem piscar).
+      Navigator.pushNamed(context, '/fila', arguments: _radarSnapshot);
     } else {
       // Decisão por code (problem+json) — F2: erro de preço = retry+negociar.
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -437,13 +523,32 @@ class _DestinoScreenState extends State<DestinoScreen> {
               const SizedBox(height: AppSpace.s),
               // Mapa real: mostra a origem e, assim que houver destino escolhido,
               // o traçado por ruas com km/min de verdade.
-              RouteMap(
-                origin: _origemLL,
-                destination:
-                    _chosen == null ? null : LatLng(_chosen!.lat, _chosen!.lon),
-                onRoute: (r) {
-                  if (mounted) setState(() => _rota = r);
-                },
+              Stack(
+                children: [
+                  RouteMap(
+                    origin: _origemLL,
+                    destination: _chosen == null
+                        ? null
+                        : LatLng(_chosen!.lat, _chosen!.lon),
+                    onRoute: (r) {
+                      if (mounted) setState(() => _rota = r);
+                    },
+                  ),
+                  // Motoristas REAIS perto do embarque: o passageiro decide
+                  // antes de chamar. A nota flutua sobre o mapa (não rouba
+                  // altura do formulário) e o número vem do backend
+                  // (presença real) — sem backend, ela avisa que o radar
+                  // está indisponível.
+                  Positioned(
+                    right: AppSpace.m,
+                    top: AppSpace.m,
+                    child: _NearbyDriversNote(
+                      snapshot: _radarSnapshot,
+                      code: _radarCode,
+                      loading: _radarLoading,
+                    ),
+                  ),
+                ],
               ),
               if (_rota != null)
                 Padding(
@@ -716,6 +821,56 @@ class _OriginBanner extends StatelessWidget {
           child: const Text('Tentar'),
         ),
       ]),
+    );
+  }
+}
+
+/// Quantos parceiros REAIS estão online perto do embarque.
+///
+/// O dado vem do backend (presença real, Postgres). A tela **nunca** inventa
+/// motorista: sem radar configurado ela diz "radar indisponível"; com o radar
+/// fora do ar, diz que está tentando de novo.
+class _NearbyDriversNote extends StatelessWidget {
+  const _NearbyDriversNote({
+    required this.snapshot,
+    required this.code,
+    required this.loading,
+  });
+
+  final RadarSnapshot? snapshot;
+  final String? code;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    if (code == 'radar_unconfigured') {
+      return const MapNote(
+        icon: Icons.info_outline_rounded,
+        text: 'Radar indisponível nesta versão',
+        alert: true,
+      );
+    }
+    final snap = snapshot;
+    if (snap == null) {
+      return MapNote(
+        icon: loading ? Icons.radar_rounded : Icons.info_outline_rounded,
+        text: loading
+            ? 'Consultando motoristas por perto…'
+            : 'Sem conexão com o radar — tentando de novo…',
+        alert: !loading,
+      );
+    }
+    final n = snap.eligibleCount;
+    if (n <= 0) {
+      return const MapNote(
+        icon: Icons.info_outline_rounded,
+        text: 'Nenhum motorista na região agora',
+        alert: true,
+      );
+    }
+    return MapNote(
+      icon: Icons.radar_rounded,
+      text: '$n ${n == 1 ? 'motorista' : 'motoristas'} na região',
     );
   }
 }
