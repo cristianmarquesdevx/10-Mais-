@@ -9,9 +9,10 @@ import 'package:parceiro/src/api/client.dart';
 import 'package:parceiro/src/auth/auth_service.dart';
 import 'package:parceiro/src/screens/screens.dart';
 
-/// O app do parceiro fala com DOIS backends: o ciclo de corrida no Postgres
-/// (Edge Function `rides`) e o que ainda não migrou (KYC, passe, carteira,
-/// desempenho). Estes testes travam a divisão e o token assíncrono.
+/// O app do parceiro fala com TRÊS backends: o ciclo de corrida no Postgres
+/// (Edge Function `rides`), o KYC no Postgres (Edge Function `kyc`) e o que
+/// ainda não migrou (passe, carteira, desempenho). Estes testes travam a
+/// divisão e o token assíncrono.
 void main() {
   late List<http.Request> seen;
 

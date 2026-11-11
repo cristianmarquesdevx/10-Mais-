@@ -156,4 +156,44 @@ janela=$(psql_c -Atc "SELECT param_value FROM city_config_current
                          AND param_key = 'PRM-oferta.timeout'" | tail -1)
 [ "$janela" = "15" ] || fail "janela da oferta na cidade piloto = $janela (esperado 15)"
 
+# 7) O KYC do parceiro no Postgres (SPECS §6): fila, SLA e decisão.
+#
+# A Edge Function `kyc` é uma fachada FINA: se estas funções não existirem
+# (ou com outra assinatura), o cadastro do parceiro quebra em produção — e
+# o erro só apareceria na hora de um cadastro de verdade.
+check_sig fn_kyc_sla_due 2 1
+check_sig fn_kyc_queue_position 1 1
+check_sig api_kyc_case_create 0 1
+check_sig api_kyc_case_get 1 1
+check_sig api_kyc_case_document 5 1
+check_sig api_kyc_queue 1 1
+check_sig api_kyc_review 4 1
+
+# A aprovação MANUAL precisa caber no vocabulário do caso: sem ela, a fila
+# humana não tem destino no banco (o caso aprovado não pode ser gravado).
+psql_c -Atc "INSERT INTO users (id, phone_e164, role)
+             VALUES ('88888888-8888-4888-8888-888888888888', '+5596990000008', 'PARTNER')" >/dev/null
+psql_c -Atc "INSERT INTO partners (user_id, city_id)
+             VALUES ('88888888-8888-4888-8888-888888888888',
+                     '99999999-9999-4999-8999-999999999999')" >/dev/null
+if ! psql_c -Atc "INSERT INTO kyc_cases (partner_user_id, status)
+                  VALUES ('88888888-8888-4888-8888-888888888888', 'APPROVED')" >/dev/null 2>&1; then
+  fail "kyc_cases não aceita o status APPROVED (aprovação manual pela operação)"
+fi
+
+# O SLA é lido da CONFIG da cidade (T7): a janela humana e a antecedência
+# mudam o prazo, e o prazo nunca cai fora da janela.
+psql_c -Atc "INSERT INTO city_configs (city_id, param_key, param_value, valid_from) VALUES
+               ('99999999-9999-4999-8999-999999999999', 'PRM-kyc.review_inicio_h', '9'::jsonb, now()),
+               ('99999999-9999-4999-8999-999999999999', 'PRM-kyc.review_fim_h', '18'::jsonb, now()),
+               ('99999999-9999-4999-8999-999999999999', 'PRM-kyc.sla_antecedencia_h', '3'::jsonb, now())" >/dev/null
+sla=$(psql_c -Atc "
+  WITH d AS (SELECT fn_kyc_sla_due('99999999-9999-4999-8999-999999999999'::uuid, now()) AS due)
+  SELECT CASE WHEN due >= now() + interval '3 hours'
+                   AND EXTRACT(HOUR FROM (due AT TIME ZONE 'America/Porto_Velho')) >= 9
+                   AND EXTRACT(HOUR FROM (due AT TIME ZONE 'America/Porto_Velho')) < 18
+              THEN 'ok' ELSE 'fora: ' || due::text END
+    FROM d" | tail -1)
+[ "$sla" = "ok" ] || fail "o SLA do KYC não respeitou a janela/antecedência da cidade ($sla)"
+
 say "TODOS OS ASSERTS OK — cadeia de deploy aplicou do zero ($count migrations)"

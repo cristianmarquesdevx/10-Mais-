@@ -39,3 +39,18 @@ PRESENCE_HEARTBEAT_S = 30
 #: Tolerância da presença (`PRM-hb.tolerancia`): só quem deu sinal de vida
 #: nos últimos 90 s aparece no radar do passageiro.
 PRESENCE_FRESH_S = 90
+
+# --- KYC (cadastro do parceiro) ---------------------------------------------
+
+#: Janela humana de revisão do KYC, em HORAS DO FUSO DA PRAÇA
+#: (`PRM-kyc.review_inicio_h` .. `PRM-kyc.review_fim_h`).
+#:
+#: O prazo de um caso NÃO é um temporizador: é o primeiro instante que cumpre
+#: a antecedência mínima dentro da janela em que há gente revisando. Prometer
+#: "2 h" às 23h30 — sem ninguém reviewing — seria uma promessa falsa.
+KYC_REVIEW_START_H = 7
+KYC_REVIEW_END_H = 23
+
+#: Antecedência mínima do SLA (`PRM-kyc.sla_antecedencia_h`): o prazo é
+#: pelo menos X horas à frente do momento em que o caso entrou na fila.
+KYC_SLA_LEAD_H = 2

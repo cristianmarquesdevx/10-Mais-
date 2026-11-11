@@ -36,13 +36,16 @@ def read(rel: str) -> str:
 class ContratoTest(unittest.TestCase):
 
     def test_valores_do_contrato(self):
-        # Os números do contrato (SPECS §1.1 e §1.5).
+        # Os números do contrato (SPECS §1.1, §1.5 e §6).
         self.assertEqual(contract.OFERTA_TIMEOUT_S, 15)
         self.assertEqual(contract.PRESENCE_HEARTBEAT_S, 30)
         self.assertEqual(contract.PRESENCE_FRESH_S, 90)
         self.assertEqual(contract.MATCH_R0_KM, 2.0)
         self.assertEqual(contract.MATCH_PASSO_KM, 1.0)
         self.assertEqual(contract.MATCH_RMAX_KM, 8.0)
+        self.assertEqual(contract.KYC_REVIEW_START_H, 7)
+        self.assertEqual(contract.KYC_REVIEW_END_H, 23)
+        self.assertEqual(contract.KYC_SLA_LEAD_H, 2)
 
     def test_seed_diz_a_janela_do_contrato(self):
         # O seed é a configuração da cidade piloto: precisa ser o contrato.
@@ -86,6 +89,59 @@ class ContratoTest(unittest.TestCase):
         self.assertIn(
             "OFERTA_TIMEOUT_CONTRATO_S = 15.0", harness)
         self.assertIn("def offer_window_s", harness)
+
+    # --- KYC (SPECS §6) -----------------------------------------------------
+
+    #: Os três parâmetros que definem o prazo de um caso do KYC.
+    KYC_PARAMS = (
+        ("PRM-kyc.review_inicio_h", "KYC_REVIEW_START_H"),
+        ("PRM-kyc.review_fim_h", "KYC_REVIEW_END_H"),
+        ("PRM-kyc.sla_antecedencia_h", "KYC_SLA_LEAD_H"),
+    )
+
+    def test_seed_diz_a_janela_kyc(self):
+        # A janela humana e a antecedência do SLA moram na config da cidade:
+        # o seed da praça piloto precisa ser o contrato.
+        seed = read("supabase/seed.sql")
+        for chave, attr in self.KYC_PARAMS:
+            achou = re.search(
+                rf"\('{re.escape(chave)}',\s*'(\d+)'::jsonb\)", seed)
+            self.assertIsNotNone(achou, f"seed.sql sem {chave}")
+            self.assertEqual(
+                int(achou.group(1)), getattr(contract, attr),
+                f"{chave} no seed diverge do contrato",
+            )
+
+    def test_migration_kyc_usa_a_janela_do_contrato(self):
+        # A função do SLA lê a config com o valor do contrato como default:
+        # sem o default, uma config ausente mudaria a promessa do app.
+        mig = read("supabase/migrations/20261110000500_kyc_api.sql")
+        for chave, attr in self.KYC_PARAMS:
+            achou = re.search(
+                rf"city_param\(p_city,'{re.escape(chave)}','(\d+)'\)", mig)
+            self.assertIsNotNone(achou, f"migration do KYC sem {chave}")
+            self.assertEqual(
+                int(achou.group(1)), getattr(contract, attr),
+                f"{chave} na migration diverge do contrato",
+            )
+
+    def test_spec_diz_a_janela_kyc(self):
+        specs = read("docs/fase2/SPECS.md")
+        self.assertIn(f"{contract.KYC_REVIEW_START_H}h", specs)
+        self.assertIn(f"{contract.KYC_REVIEW_END_H}h", specs)
+        self.assertIn(
+            f"antecedência mínima **{contract.KYC_SLA_LEAD_H} h**", specs,
+            "o SPEC não documenta a antecedência mínima do SLA do KYC",
+        )
+
+    def test_openapi_tem_a_fila_e_a_decisao_kyc(self):
+        # O contrato publicado precisa ter as rotas que o app e a operação
+        # usam — inclusive as que chegaram na migração do KYC no Postgres.
+        api = read("docs/fase2/openapi.yaml")
+        for rota in ("/kyc/cases:", "/kyc/cases/{caseId}:",
+                     "/kyc/cases/{caseId}/review:", "/kyc/queue:"):
+            self.assertIn(rota, api, f"openapi sem {rota}")
+        self.assertIn("APPROVED, IN_REVIEW, REJECTED, RESUBMIT", api)
 
 
 if __name__ == "__main__":

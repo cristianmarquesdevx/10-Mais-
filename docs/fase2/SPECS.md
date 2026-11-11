@@ -167,3 +167,59 @@ suavização: m_efetivo = 0.7 × m_anterior + 0.3 × m   (evita oscilação 1.0�
    `trg_city_config_window`). O mesmo valor vive em `scripts/contract.py`
    (`OFERTA_TIMEOUT_S`) e é conferido contra o SQL e o SPEC por
    `scripts/test_contract.py`.
+
+## 6. KYC do parceiro — fila, SLA e decisão (Edge Function `kyc`)
+
+O KYC é regra do **servidor**: quem decide é o Postgres
+(`api_kyc_case_create`, `api_kyc_case_get`, `api_kyc_case_document`,
+`api_kyc_queue`, `api_kyc_review` —
+`supabase/migrations/20261110000500_kyc_api.sql`). A Edge Function `kyc` é
+uma fachada fina que repassa o `Authorization` do chamador: o ator é
+`auth.uid()`, nunca um id do corpo. Nenhum número deste bloco está no
+código — tudo vem de `city_configs` (T7).
+
+### 6.1 O caso e a fila
+
+- `POST /kyc/cases` abre (ou retoma) o caso do parceiro. Quem já tem um caso
+  em aberto (`IN_REVIEW`, `RESUBMIT`, `REJECTED`) recebe o **mesmo** caso: um
+  duplo toque no botão não cria duas filas. A mesma `Idempotency-Key` devolve
+  a resposta original (`Idempotency-Replayed: true`).
+- A fila é ordenada por `(sla_due_at, created_at, id)`; a **posição** que o
+  app mostra é o rank do caso nessa ordem (1 = o próximo a ser analisado).
+- Só o papel **AGENT/ADMIN** vê a fila (`GET /kyc/queue`) e decide
+  (`POST /kyc/cases/{caseId}/review`). O parceiro enxerga apenas o caso dele
+  (`GET /kyc/cases/{caseId}`) — caso alheio é 403, sempre.
+
+### 6.2 O SLA é uma promessa de atendimento, não um temporizador
+
+```
+prazo = primeiro instante ≥ (agora + PRM-kyc.sla_antecedencia_h)
+        que cai dentro da janela humana
+        [PRM-kyc.review_inicio_h .. PRM-kyc.review_fim_h]   (fuso da praça)
+```
+
+- Cidade piloto: janela humana **7h–23h**, antecedência mínima **2 h**
+  (`scripts/contract.py`: `KYC_REVIEW_START_H`, `KYC_REVIEW_END_H`,
+  `KYC_SLA_LEAD_H`).
+- O relógio é o do **servidor**, no fuso da praça (`cities.timezone`).
+- Prometer "2 h" às 23h30 — quando não há gente revisando — seria uma
+  promessa falsa: o prazo cai na primeira abertura da janela seguinte que
+  ainda cumpre a antecedência.
+
+### 6.3 A decisão
+
+- `APPROVED` (aprovado pela operação), `REJECTED` (recusado) ou `RESUBMIT`
+  (a operação pede documento novo). O vocabulário do caso é o mesmo do
+  parceiro (`partners.kyc_status`), para a fila manual ter destino.
+- Recusa e pedido de reenvio exigem **`rejection_code`** (422
+  `rejection_code_required`): sem o código padronizado, o parceiro não sabe
+  o que corrigir.
+- A decisão é o ato que muda o mundo: `partners.kyc_status` passa a valer
+  (só `APPROVED` recebe oferta — §1.1), o rastro vai para `audit_log`
+  (`KYC_DECIDED`), o parceiro é notificado (`IN_APP`, `KYC_DECIDED`) e o
+  evento `kyc.decided` é emitido para o BI.
+- O reenvio do parceiro (`POST /kyc/cases/{caseId}/documents`) devolve o
+  caso para a fila como `RESUBMIT`, com prazo novo (o relógio andou desde a
+  última promessa) e o motivo da recusa limpo — o histórico fica no
+  `audit_log`.
+

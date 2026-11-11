@@ -103,6 +103,30 @@ VALUES
    '{"role":"PARTNER","full_name":"Parceiro dev"}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
+-- O GoTrue lê as colunas de token como `string` (não `*string`): NULL quebra o
+-- GET /auth/v1/user com 500 (`unexpected_failure`) — foi o que aconteceu com
+-- as contas semeadas aqui.
+--
+-- A normalização é DINÂMICA de propósito: o schema `auth` é do GoTrue (não
+-- do produto) e muda de versão; o stub do CI nem tem essas colunas. Onde a
+-- coluna existe, ela vale '' (string vazia); onde não existe, nada acontece.
+DO $$
+DECLARE
+  c text;
+BEGIN
+  FOREACH c IN ARRAY ARRAY[
+    'confirmation_token', 'recovery_token', 'email_change_token_new',
+    'email_change', 'phone_change', 'phone_change_token',
+    'email_change_token_current', 'reauthentication_token'
+  ] LOOP
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'auth' AND table_name = 'users'
+                  AND column_name = c) THEN
+      EXECUTE format('UPDATE auth.users SET %I = %L WHERE %I IS NULL', c, '', c);
+    END IF;
+  END LOOP;
+END $$;
+
 UPDATE users SET email = 'passageiro@dezemais.local'
  WHERE id = '11111111-1111-4111-8111-111111111111' AND email IS NULL;
 UPDATE users SET email = 'parceiro@dezemais.local'

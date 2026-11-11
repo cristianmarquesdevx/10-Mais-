@@ -12,7 +12,7 @@ import 'src/theme/theme.dart';
 ///
 /// Backends (tudo vem do ambiente de build — nunca hardcoded em release):
 ///
-///   `API_BASE`      o que ainda não migrou (KYC, passe, carteira,
+///   `API_BASE`      o que ainda não migrou (passe, carteira,
 ///                   desempenho, preferências) — em produção a mesma Edge
 ///                   Function (a URL dela, com o prefixo `/functions/v1/v1`,
 ///                   vem no build); no piloto e no dev, a API de
@@ -22,6 +22,10 @@ import 'src/theme/theme.dart';
 ///   `RADAR_BASE`    a presença real do parceiro (Edge Function `radar`).
 ///                   **Vazio = sem backend de presença**: o online/offline
 ///                   fica no backend de demonstração (modo dev/demo).
+///   `KYC_BASE`      o KYC no Postgres (Edge Function `kyc`): fila, SLA e
+///                   decisão da operação. Aponta para a FUNÇÃO
+///                   (`.../functions/v1/kyc`). Vazio = o KYC fica na API de
+///                   demonstração (que aprova na hora).
 ///   `AUTH_BASE`     o GoTrue (Supabase Auth). Vazio = modo dev: sem
 ///                   servidor de acesso, o login aceita o OTP de 4 dígitos.
 ///   `AUTH_ANON_KEY` chave pública do projeto (não é segredo).
@@ -61,6 +65,10 @@ class _ParceiroAppState extends State<ParceiroApp> {
     // Base da Edge Function `radar` (presença real no Postgres). Vazio =
     // modo dev/demo: a presença fica no backend de demonstração.
     const radarBase = String.fromEnvironment('RADAR_BASE', defaultValue: '');
+    // Base da Edge Function `kyc` (KYC no Postgres: fila, SLA e decisão).
+    // Vazio = modo dev/demo: o KYC fica na API de demonstração (que aprova
+    // na hora) — no piloto, a URL real da função entra no build.
+    const kycBase = String.fromEnvironment('KYC_BASE', defaultValue: '');
 
     // AUTH_BASE vazio = modo dev: sem servidor de acesso o app não pede
     // código e não renova token (é o modo dos testes de layout).
@@ -71,6 +79,7 @@ class _ParceiroAppState extends State<ParceiroApp> {
     _api = ApiClient(
       baseUrl: apiBase,
       ridesBase: ridesBase,
+      kycBase: kycBase,
       // O token da sessão manda; o do build é o plano B. A chamada é
       // assíncrona porque o serviço renova a sessão quando o token vence.
       accessToken: () async {

@@ -5,9 +5,11 @@ import '../api/client.dart';
 import '../theme/theme.dart';
 
 /// P1 Onboarding/KYC — submissão do caso (captura guiada já realizada; o
-/// módulo de câmera ML Kit entra no módulo KYC, F9). 3 faixas de decisão:
-/// AUTO_APPROVED (pode online) · IN_REVIEW (fila + SLA) · REJECTED/RESUBMIT
-/// (reenvio só do documento problemático).
+/// módulo de câmera ML Kit entra no módulo KYC, F9). 5 faixas de decisão:
+/// AUTO_APPROVED (automático) · APPROVED (aprovado pela operação) ·
+/// IN_REVIEW (na fila, com posição e prazo) · RESUBMIT (documentação
+/// reenviada, volta para a fila) · REJECTED (recusado — só aí o parceiro
+/// pode reenviar o documento).
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -20,7 +22,46 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   KycCase? _case;
   String? _error;
 
+  /// O caso está NA FILA da operação (em análise ou já reenviado)?
+  static bool _naFila(String? status) =>
+      status == 'IN_REVIEW' || status == 'RESUBMIT';
+
+  /// Reenvia a documentação de um caso recusado. No backend real o caso
+  /// volta para a fila (RESUBMIT, com posição e prazo novos).
+  ///
+  /// Se o servidor não responder com o caso (modo demonstração), o estado
+  /// NÃO é inventado: a faixa continua mostrando a recusa. Mentir sobre a
+  /// fila é pior do que uma tela a menos.
+  Future<void> _resubmit(KycCase current) async {
+    final atualizado =
+        await AppScope.apiOf(context).resubmitDocument(current.caseId);
+    if (!mounted) return;
+    setState(() => _case = atualizado ?? current);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Documentação reenviada.')));
+  }
+
   Future<void> _submit() async {
+    final atual = _case;
+    // Caso RECUSADO: o botão reenvia o documento — não abre um caso novo
+    // (o servidor devolveria o mesmo caso).
+    if (atual != null && atual.status == 'REJECTED') {
+      setState(() {
+        _submitting = true;
+        _error = null;
+      });
+      try {
+        await _resubmit(atual);
+      } on ApiProblem catch (p) {
+        if (mounted) setState(() => _error = p.code);
+      } catch (_) {
+        if (mounted) setState(() => _error = 'offline');
+      } finally {
+        if (mounted) setState(() => _submitting = false);
+      }
+      return;
+    }
+
     setState(() {
       _submitting = true;
       _error = null;
@@ -30,9 +71,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       if (!mounted) return;
       setState(() => _case = c);
       if (c.status == 'AUTO_APPROVED' && context.mounted) {
+        // Aprovação automática (demonstração): o parceiro já pode online, a
+        // tela sai. A aprovação MANUAL fica na tela: ela é a informação que
+        // o parceiro esperava ver depois de horas na fila.
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Aprovado! Você já pode ficar online.')));
         Navigator.pop(context);
+      } else if (c.status == 'APPROVED') {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'Aprovado pela operação. Você já pode ficar online.')));
       }
     } on ApiProblem catch (p) {
       if (mounted) setState(() => _error = p.code);
@@ -86,7 +134,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   style: const TextStyle(color: AppColors.danger)),
             ),
           FilledButton.icon(
-            onPressed: _submitting ? null : _submit,
+            // Com o caso NA FILA (em análise ou reenviado), o botão fica
+            // travado: quem manda no ritmo do caso é a operação, não o
+            // parceiro. Só a recusa libera um novo envio.
+            onPressed: _submitting || _naFila(_case?.status)
+                ? null
+                : _submit,
             icon: _submitting
                 ? const SizedBox(
                     width: 18,
@@ -94,9 +147,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.upload_file_outlined),
             label: Text(
-                _case?.status == 'REJECTED' || _case?.status == 'RESUBMIT'
+                _case?.status == 'REJECTED'
                     ? 'Reenviar documento'
-                    : 'Enviar documentação'),
+                    : _naFila(_case?.status)
+                        ? 'Em análise'
+                        : 'Enviar documentação'),
           ),
           const SizedBox(height: AppSpace.m),
           const Text(
@@ -122,12 +177,22 @@ class _CaseStatus extends StatelessWidget {
           AppColors.earn,
           'Aprovado automaticamente.'
         ),
+      'APPROVED' => (
+          Icons.verified_outlined,
+          AppColors.earn,
+          'Aprovado pela operação.'
+        ),
       'IN_REVIEW' => (
           Icons.hourglass_top_outlined,
           AppColors.warning,
           'Em análise — posição na fila: ${kycCase.position ?? '—'}'
         ),
-      'REJECTED' || 'RESUBMIT' => (
+      'RESUBMIT' => (
+          Icons.hourglass_top_outlined,
+          AppColors.warning,
+          'Documentação reenviada — posição na fila: ${kycCase.position ?? '—'}'
+        ),
+      'REJECTED' => (
           Icons.replay_outlined,
           AppColors.danger,
           'Documentação rejeitada — reenvie apenas o documento indicado.'

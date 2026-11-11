@@ -970,7 +970,9 @@ class RealBackend:
       - `AUTH_BASE` → GoTrue (OTP de 6 dígitos, chega por e-mail);
       - `RIDES_BASE` → Edge Function `rides` (Postgres: cotação congelada,
         despacho, fases, avaliação);
-      - o que ainda não migrou (radar do passageiro, geocoding, perfil, KYC,
+      - `KYC_BASE` → Edge Function `kyc` (Postgres: fila do cadastro do
+        parceiro, SLA, decisão da operação);
+      - o que ainda não migrou (radar do passageiro, geocoding, perfil,
         carteira) → API de demonstração, como no build de piloto.
 
     O dinheiro tem UM caminho só: o webhook assinado do PSP. O harness faz o

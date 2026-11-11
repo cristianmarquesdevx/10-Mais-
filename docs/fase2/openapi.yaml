@@ -17,7 +17,11 @@ info:
         `/offers*`, `/partner/transitions`, `/payments/ride`. These are the
         routes of the ride cycle — the source of truth is the database
         (`api_*` / `fn_*`), and the function is a thin facade.
-      - Still on the demo API (migrates later): profile, KYC, wallet, passes,
+      - Postgres-backed (Edge Function `kyc`): `/kyc/cases*`, `/kyc/queue` —
+        the partner's registration: queue, SLA and the operation's decision
+        (SPECS §6). The function is addressed by its name
+        (`/functions/v1/kyc/<path>`).
+      - Still on the demo API (migrates later): profile, wallet, passes,
         preferences, performance, heatmap, nearby, support, invites, scratch.
 
     The `rides` function is addressed BY ITS NAME: `/functions/v1/rides/<path>`.
@@ -827,27 +831,136 @@ paths:
 
   /kyc/cases:
     post:
-      summary: Submit KYC (guided capture already stored; triggers auto-decision)
+      summary: Open (or resume) the partner's KYC case (REAL backend — Edge Function `kyc`)
+      description: >
+        The KYC is decided by the SERVER (Postgres): the case enters the
+        operation's review queue and the partner gets a position and an SLA.
+        Served by the Edge Function `kyc` (`/functions/v1/kyc/cases`) — the
+        route prefix `/kyc` IS the function's own name.
+        A partner who already has an open case (IN_REVIEW/RESUBMIT/REJECTED)
+        gets the SAME case back: a double tap never creates two queue
+        entries. The same Idempotency-Key replays the original answer
+        (`Idempotency-Replayed: true`).
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       responses:
         '201':
-          description: Case created; position = manual-review queue (only when IN_REVIEW)
+          description: >
+            Case created/resumed; position = rank in the review queue (only
+            when IN_REVIEW/RESUBMIT)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KycCase' }
+        '401': { $ref: '#/components/responses/Problem' }   # unauthenticated
+        '403': { $ref: '#/components/responses/Problem' }   # not_a_partner
+
+  /kyc/cases/{caseId}:
+    get:
+      summary: The caller's own KYC case (REAL backend — Edge Function `kyc`)
+      description: >
+        The owner sees their own case; the operation sees any case. Another
+        partner's case is 403 — the identity comes from the token, never
+        from the body.
+      parameters: [{ name: caseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200':
+          description: The case
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KycCase' }
+        '403': { $ref: '#/components/responses/Problem' }   # forbidden
+        '404': { $ref: '#/components/responses/Problem' }   # not_found
+
+  /kyc/cases/{caseId}/documents:
+    post:
+      summary: Re-submit the rejected document (guided retry)
+      description: >
+        The case goes back to the queue as RESUBMIT with a NEW deadline (the
+        clock moved since the last promise); the rejection code is cleared
+        and the history stays in `audit_log`.
+      parameters: [{ name: caseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                doc_type: { type: string, enum: [CNH, CRLV, SELFIE, PROOF_ADDRESS, OTHER] }
+                storage_path:
+                  type: string
+                  nullable: true
+                  description: private storage path (signed URL); absent while the camera module is pending
+                expires_at: { type: string, format: date, nullable: true }
+                quality_flags: { type: object, additionalProperties: true }
+      responses:
+        '201':
+          description: Queued for re-analysis
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KycCase' }
+        '403': { $ref: '#/components/responses/Problem' }   # forbidden
+        '409': { $ref: '#/components/responses/Problem' }   # kyc_already_approved
+
+  /kyc/cases/{caseId}/review:
+    post:
+      summary: Operation's decision on a queued case (AGENT/ADMIN only)
+      description: >
+        The decision changes the world: `partners.kyc_status` follows it
+        (only APPROVED makes the partner eligible for offers — SPECS §1.1),
+        the trail goes to `audit_log` (KYC_DECIDED), the partner is notified
+        (IN_APP) and the event `kyc.decided` is emitted for BI. Rejection
+        and re-submission requests REQUIRE a standardized `rejection_code`
+        (422 `rejection_code_required`).
+      parameters: [{ name: caseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [APPROVED, REJECTED, RESUBMIT] }
+                rejection_code: { type: string, nullable: true, example: CNH_ILEGIVEL }
+                note: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Decision recorded
           content:
             application/json:
               schema:
                 type: object
-                required: [case_id, status]
+                required: [case_id, status, partner_kyc_status]
                 properties:
                   case_id: { type: string, format: uuid }
-                  status: { type: string, enum: [AUTO_APPROVED, IN_REVIEW, REJECTED, RESUBMIT] }
-                  position: { type: integer, nullable: true }
-                  sla: { type: string, format: date-time, nullable: true, description: 'SLA due (manual review, 7h-23h)' }
-  /kyc/cases/{caseId}/documents:
-    post:
-      summary: Upload re-submission for a single rejected document (guided retry)
-      parameters: [{ name: caseId, in: path, required: true, schema: { type: string, format: uuid } }]
+                  status: { type: string, enum: [APPROVED, REJECTED, RESUBMIT] }
+                  partner_kyc_status: { type: string, enum: [APPROVED, REJECTED, RESUBMIT] }
+        '403': { $ref: '#/components/responses/Problem' }   # forbidden (not AGENT/ADMIN)
+        '409': { $ref: '#/components/responses/Problem' }   # kyc_case_not_in_queue
+        '422': { $ref: '#/components/responses/Problem' }   # rejection_code_required / invalid_decision
+
+  /kyc/queue:
+    get:
+      summary: The operation's review queue (AGENT/ADMIN only)
+      description: >
+        The queue ordered by (sla_due_at, created_at, id): the first case is
+        the next to be analysed. Only the operation sees it — a partner gets
+        403. The deadline is the promise of the SPECS §6.2 (human window).
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
       responses:
-        '201': { description: Queued for re-analysis }
+        '200':
+          description: Cases waiting for review
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cases]
+                properties:
+                  cases:
+                    type: array
+                    items: { $ref: '#/components/schemas/KycQueueItem' }
+        '403': { $ref: '#/components/responses/Problem' }   # forbidden
 
 components:
   securitySchemes:
@@ -1026,6 +1139,41 @@ components:
         vehicle_model: { type: string, nullable: true }
         vehicle_year: { type: string, nullable: true, example: '2022' }
       additionalProperties: true
+    KycCase:
+      type: object
+      description: The partner's KYC case (SPECS §6)
+      required: [case_id, status]
+      properties:
+        case_id: { type: string, format: uuid }
+        status: { type: string, enum: [AUTO_APPROVED, APPROVED, IN_REVIEW, REJECTED, RESUBMIT] }
+        position: { type: integer, nullable: true, description: 'rank in the review queue (1 = next)' }
+        sla:
+          type: string
+          format: date-time
+          nullable: true
+          description: deadline of the manual review (inside the human window — SPECS §6.2)
+        rejection_code: { type: string, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        documents:
+          type: array
+          items:
+            type: object
+            properties:
+              doc_type: { type: string, enum: [CNH, CRLV, SELFIE, PROOF_ADDRESS, OTHER] }
+              created_at: { type: string, format: date-time }
+              upload_pending: { type: boolean }
+    KycQueueItem:
+      type: object
+      description: One case waiting for the operation's review
+      required: [case_id, status]
+      properties:
+        case_id: { type: string, format: uuid }
+        partner_user_id: { type: string, format: uuid }
+        status: { type: string, enum: [IN_REVIEW, RESUBMIT] }
+        sla_due_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        position: { type: integer }
+        documents: { type: integer }
     PartnerPreferences:
       type: object
       description: What the partner wants to receive (Configurar solicitações)

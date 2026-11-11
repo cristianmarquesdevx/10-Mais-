@@ -24,6 +24,10 @@ import time
 DEV_USERS = {
     "passenger": "11111111-1111-4111-8111-111111111111",
     "partner": "22222222-2222-4222-8222-222222222222",
+    # Operação: enxerga a fila do KYC e decide (api_kyc_queue/api_kyc_review).
+    "agent": "66666666-6666-4666-8666-666666666666",
+    # Parceiro que ainda não submetiu o KYC (conta de dev do smoke do KYC).
+    "partner_kyc": "77777777-7777-4777-8777-777777777777",
 }
 
 

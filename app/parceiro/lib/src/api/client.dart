@@ -615,10 +615,13 @@ class PassState {
       );
 }
 
-/// Resultado do POST /kyc/cases (F9): 3 faixas de decisão.
+/// O caso de KYC do parceiro (F9): 5 faixas de decisão.
 class KycCase {
   final String caseId;
-  final String status; // AUTO_APPROVED | IN_REVIEW | REJECTED | RESUBMIT
+
+  /// AUTO_APPROVED (automático) · APPROVED (aprovado pela operação) ·
+  /// IN_REVIEW (na fila) · REJECTED (recusado) · RESUBMIT (reenviado).
+  final String status;
   final int? position;
   final DateTime? sla;
   KycCase(
@@ -703,13 +706,16 @@ class ApiClient {
     required this.baseUrl,
     required this.accessToken,
     this.ridesBase,
+    this.kycBase,
     http.Client? inner,
     IdempotencyKey? newIdemKey,
   })  : _http = inner ?? http.Client(),
         _newIdemKey = newIdemKey ?? _uuid;
 
-  /// Base do que ainda roda na API de demonstração (perfil, KYC, passe,
-  /// carteira, desempenho, preferências). Ex.: http://10.0.2.2:8787/functions/v1/v1
+  /// Base do que ainda roda na API de demonstração (perfil, passe, carteira,
+  /// desempenho, preferências). O KYC tem base própria ([kycBase]): com ela
+  /// configurada, o cadastro do parceiro vai para o Postgres.
+  /// Ex.: http://10.0.2.2:8787/functions/v1/v1
   final String baseUrl;
 
   /// Base do backend REAL do ciclo de corrida (Edge Function `rides` do
@@ -720,12 +726,49 @@ class ApiClient {
   /// de demonstração — o app não quebra e o comportamento é o de antes.
   final String? ridesBase;
 
+  /// Base do backend REAL do KYC (Edge Function `kyc` do Supabase): abertura
+  /// do caso, fila, SLA e decisão.
+  ///
+  /// Convenção (igual à do `rides`): a base aponta para a FUNÇÃO —
+  /// `http://host/functions/v1/kyc`. A rota do contrato é `/kyc/cases`; se a
+  /// base já traz o nome da função, o prefixo `/kyc` não é repetido e a URL
+  /// final é `http://host/functions/v1/kyc/cases`.
+  ///
+  /// Vazio = modo demonstração: o KYC continua na API de demonstração (que
+  /// aprova na hora) — o app não quebra, mas não há fila de verdade.
+  final String? kycBase;
+
   /// O ciclo de corrida já fala com o Postgres de verdade?
   bool get usesRidesBackend => ridesBase != null && ridesBase!.isNotEmpty;
+
+  /// O KYC já fala com o Postgres de verdade?
+  bool get usesKycBackend => kycBase != null && kycBase!.isNotEmpty;
 
   String get _ridesRoot {
     final b = ridesBase ?? '';
     return b.endsWith('/') ? b.substring(0, b.length - 1) : b;
+  }
+
+  String get _kycRoot {
+    final b = kycBase ?? '';
+    return b.endsWith('/') ? b.substring(0, b.length - 1) : b;
+  }
+
+  /// O caminho do KYC no backend real.
+  ///
+  /// A rota do CONTRATO é `/kyc/cases` — ela vale para a base de demonstração
+  /// (que serve `/kyc/...` dentro da função `v1`) e para o backend real. No
+  /// backend real a base já aponta para a função (`.../functions/v1/kyc`),
+  /// então o prefixo `/kyc` da rota NÃO é repetido: a URL final é sempre
+  /// `.../functions/v1/kyc/cases`.
+  ///
+  /// Se a base apontar para a raiz das functions (`.../functions/v1`), o
+  /// prefixo é mantido — e a URL final é a mesma.
+  String _kycPath(String path) {
+    if (_kycRoot.endsWith('/kyc') && path.startsWith('/kyc')) {
+      return path.substring('/kyc'.length);
+    }
+    return path;
   }
 
   final TokenProvider accessToken;
@@ -755,11 +798,20 @@ class ApiClient {
     bool idempotent = false,
     Map<String, String>? query,
     bool rides = false,
+    bool kyc = false,
   }) async {
     // `rides: true` manda a chamada para o backend real do ciclo de corrida
     // — quando ele não está configurado, cai na base de demonstração.
-    final base = (rides && usesRidesBackend) ? _ridesRoot : baseUrl;
-    final uri = Uri.parse('$base$path').replace(queryParameters: query);
+    // `kyc: true` faz o mesmo com o KYC (fila/SLA no Postgres).
+    final realKyc = kyc && usesKycBackend;
+    final base = rides && usesRidesBackend
+        ? _ridesRoot
+        : realKyc
+            ? _kycRoot
+            : baseUrl;
+    final uri =
+        Uri.parse('$base${realKyc ? _kycPath(path) : path}')
+            .replace(queryParameters: query);
     final headers = {...await _headers()};
     if (idempotent) headers['Idempotency-Key'] = _newIdemKey();
 
@@ -987,12 +1039,28 @@ class ApiClient {
   // --- KYC (P1 onboarding) ------------------------------------------------
 
   /// 201 { case_id, status, position?, sla }.
-  Future<KycCase> submitKyc() async =>
-      KycCase.fromJson(await _req('POST', '/kyc/cases', idempotent: true));
+  ///
+  /// No backend real (`KYC_BASE`) o caso entra na FILA da operação: o
+  /// status é IN_REVIEW, com a posição na fila e o prazo (SLA). Na API de
+  /// demonstração o status volta AUTO_APPROVED (aprovação na hora).
+  Future<KycCase> submitKyc() async => KycCase.fromJson(
+      await _req('POST', '/kyc/cases', idempotent: true, kyc: true));
 
   /// Reenvio guiado só do documento rejeitado (F9).
-  Future<void> resubmitDocument(String caseId) =>
-      _req('POST', '/kyc/cases/$caseId/documents', idempotent: true);
+  ///
+  /// No backend real volta o caso para a fila como RESUBMIT, com o prazo
+  /// novo; na demonstração o corpo é vazio e devolve `null` (a tela segue
+  /// com o estado que já tinha).
+  Future<KycCase?> resubmitDocument(String caseId, {String? docType}) async {
+    final j = await _req(
+      'POST',
+      '/kyc/cases/$caseId/documents',
+      idempotent: true,
+      kyc: true,
+      body: docType == null ? null : {'doc_type': docType},
+    );
+    return j.containsKey('case_id') ? KycCase.fromJson(j) : null;
+  }
 
   /// Cadastro completo do motorista (3.7).
   Future<PartnerInfo> updatePartnerProfile({
