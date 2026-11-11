@@ -1,5 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Servico em primeiro plano: mantem o app VIVO (e o heartbeat batendo)
+         enquanto o parceiro esta online, mesmo com o app em segundo plano.
+         Sem isso o Android congela o app e o parceiro some do radar em 90 s. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Presença real: heartbeat com posição enquanto ONLINE. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
@@ -29,6 +35,13 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Servico de presenca: segura o processo do app enquanto o parceiro
+             esta ONLINE. O tipo `location` e o que permite rodar em segundo
+             plano com a localizacao ligada. -->
+        <service
+            android:name=".PresenceService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

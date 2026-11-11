@@ -14,8 +14,14 @@ import 'src/theme/theme.dart';
 ///
 ///   `API_BASE`      o que ainda não migrou (KYC, passe, carteira,
 ///                   desempenho, preferências) — em produção a mesma Edge
-///                   Function; no piloto, a API de demonstração.
+///                   Function (a URL dela, com o prefixo `/functions/v1/v1`,
+///                   vem no build); no piloto e no dev, a API de
+///                   demonstração (default `10.0.2.2:8787`, que serve as
+///                   rotas sem prefixo).
 ///   `RIDES_BASE`    o ciclo de corrida no Postgres (Edge Function `rides`).
+///   `RADAR_BASE`    a presença real do parceiro (Edge Function `radar`).
+///                   **Vazio = sem backend de presença**: o online/offline
+///                   fica no backend de demonstração (modo dev/demo).
 ///   `AUTH_BASE`     o GoTrue (Supabase Auth). Vazio = modo dev: sem
 ///                   servidor de acesso, o login aceita o OTP de 4 dígitos.
 ///   `AUTH_ANON_KEY` chave pública do projeto (não é segredo).
@@ -41,7 +47,7 @@ class _ParceiroAppState extends State<ParceiroApp> {
   void initState() {
     super.initState();
     const apiBase = String.fromEnvironment('API_BASE',
-        defaultValue: 'http://10.0.2.2:8787/functions/v1/v1');
+        defaultValue: 'http://10.0.2.2:8787');
     // Vazio = modo demonstração: o ciclo de corrida fica na API de demo.
     // O build de piloto/piloto passa a URL real do Postgres.
     const ridesBase = String.fromEnvironment('RIDES_BASE', defaultValue: '');
@@ -52,6 +58,9 @@ class _ParceiroAppState extends State<ParceiroApp> {
         defaultValue: 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH');
     // Token de build: é o plano B para quando não há sessão (dev/testes).
     const buildToken = String.fromEnvironment('API_TOKEN', defaultValue: '');
+    // Base da Edge Function `radar` (presença real no Postgres). Vazio =
+    // modo dev/demo: a presença fica no backend de demonstração.
+    const radarBase = String.fromEnvironment('RADAR_BASE', defaultValue: '');
 
     // AUTH_BASE vazio = modo dev: sem servidor de acesso o app não pede
     // código e não renova token (é o modo dos testes de layout).
@@ -75,12 +84,16 @@ class _ParceiroAppState extends State<ParceiroApp> {
       // A presença no radar (Postgres) leva o token da SESÃO: é o que impede
       // um parceiro de publicar posição no nome de outro. Sem sessão (modo
       // dev) a presença fica desligada e a tela avisa em vez de fingir.
-      presence: auth == null
-          ? PresenceApi(token: defaultRadarToken)
-          : PresenceApi(tokenProvider: () async {
-              final session = await auth.accessToken();
-              return session ?? '';
-            }),
+      presence: PresenceApi(
+        baseUrl: radarBase,
+        token: auth == null ? defaultRadarToken : null,
+        tokenProvider: auth == null
+            ? null
+            : () async {
+                final session = await auth.accessToken();
+                return session ?? '';
+              },
+      ),
     );
     _partner.loadMe(); // perfil/KYC ao abrir (P1 gate: em análise ≠ online)
     // Mostra o login imediatamente para evitar tela branca durante o carregamento do tema.

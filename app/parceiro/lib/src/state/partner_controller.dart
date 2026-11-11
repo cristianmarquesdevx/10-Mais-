@@ -7,6 +7,7 @@ import '../api/client.dart';
 import '../api/presence_api.dart';
 import '../api/wallet_source.dart';
 import '../location/location_service.dart';
+import '../services/presence_keep_alive.dart';
 
 /// Estado operacional do parceiro (SPECS §5.3): OFFLINE | ONLINE | PAUSED | EM_CORRIDA.
 /// PAUSADO: motorista indisponível para novas ofertas, por tempo limitado (máx. 3h,
@@ -22,10 +23,13 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
     this.api, {
     this.pollInterval = const Duration(seconds: 5),
     this.maxBreakMinutes = 180, // pausa máxima: 3 horas (configurável)
+    this.heartbeatInterval = const Duration(seconds: 30),
     PresenceApi? presence,
+    PresenceKeepAlive? keepAlive,
     LocationService location = const LocationService(),
     WalletBalanceSource? walletSource,
   })  : _presence = presence ?? PresenceApi(),
+        _keepAlive = keepAlive ?? PresenceKeepAlive(),
         _location = location,
         _walletSourceOverride = walletSource {
     WidgetsBinding.instance.addObserver(this);
@@ -35,8 +39,15 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
   final Duration pollInterval;
   final int maxBreakMinutes;
 
+  /// Intervalo do heartbeat de presença. O servidor só mostra quem deu sinal
+  /// de vida nos últimos 90 s: 30 s deixa folga para três batidas.
+  final Duration heartbeatInterval;
+
   /// Presença real (radar): status + posição publicados no backend.
   final PresenceApi _presence;
+
+  /// Mantém o app vivo enquanto ONLINE (serviço em primeiro plano no Android).
+  final PresenceKeepAlive _keepAlive;
   final LocationService _location;
   final WalletBalanceSource? _walletSourceOverride;
 
@@ -151,6 +162,10 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     try {
       await action();
+    } on PresenceProblem catch (p) {
+      // O radar (Postgres) recusa com o código do negócio — `kyc_not_approved`
+      // é o que leva o parceiro de volta ao cadastro.
+      lastErrorCode = _presenceCode(p.code);
     } on ApiProblem catch (p) {
       lastErrorCode = p.code;
     } catch (_) {
@@ -160,6 +175,24 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
     } finally {
       busy = false;
       notifyListeners();
+    }
+  }
+
+  /// Código que a tela entende, a partir do que o backend respondeu.
+  ///
+  /// O Postgres fala em código de negócio (`kyc_not_approved`,
+  /// `not_a_partner`); a tela fala em código de UI. O resto vira
+  /// `presence_error` — genérico, mas honesto.
+  static String _presenceCode(String code) {
+    switch (code) {
+      case 'kyc_not_approved':
+      case 'not_a_partner':
+      case 'presence_unconfigured':
+      case 'invalid_position':
+      case 'location_unavailable':
+        return code;
+      default:
+        return 'presence_error';
     }
   }
 
@@ -245,54 +278,65 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
           }
           at = GeoPoint(fix.lat, fix.lon);
         }
-        // A resposta do online é a confirmação da presença; modo e validade
-        // do passe NÃO vêm daqui: o perfil (`/me`) é a fonte, e ele vem do
-        // backend real quando o ciclo de corrida já roda no Postgres.
-        await api.goOnline(
-          lat: at.lat,
-          lon: at.lon,
-        );
+        // Quem publica a presença é o SERVIDOR: com o radar real (Postgres)
+        // configurado, é `fn_presence_update` que decide — e pode recusar
+        // (KYC pendente). Sem ele (modo demo), é a API de demonstração.
+        await _publishOnline(at);
+        // O estado local só muda DEPOIS do servidor aceitar: assim um 403
+        // não deixa o parceiro "online" na tela e ausente do despacho.
         status = PartnerStatus.online;
         _lastPosition = at;
         _clearBreak(); // encerra qualquer pausa ao voltar online
+        // Mantém o processo VIVO: sem isso o Android congela o app em segundo
+        // plano, o heartbeat para e o parceiro some do radar em 90 s.
+        // Não bloqueia o ONLINE: o serviço é a garantia de sobrevivência, não
+        // o que publica a presença (quem publica é o servidor, acima).
+        unawaited(_keepAlive.start());
         _startPolling();
-        await refreshOffers();
-        // Só depois do sucesso da API: publica a presença que o radar lê.
-        await _publishPresence('ONLINE_DISPONIVEL', at: at);
+        // O heartbeat ANTES da leitura de ofertas: se a leitura falhar, a
+        // presença continua batendo (era o que sumia do radar).
         _startHeartbeat();
+        await refreshOffers();
       });
 
+  /// Publica o ONLINE no backend de presença.
+  ///
+  /// Com o radar real: `POST /radar/presence` (Postgres) — é o mesmo dado
+  /// que o despacho do passageiro lê. Sem ele (modo demo): a rota
+  /// `/partner/online` da API de demonstração.
+  Future<void> _publishOnline(GeoPoint at) async {
+    if (_presence.configured) {
+      await _presence.setStatus('ONLINE_DISPONIVEL', lat: at.lat, lon: at.lon);
+      return;
+    }
+    await api.goOnline(lat: at.lat, lon: at.lon);
+  }
+
   Future<void> goOffline() => _guard(() async {
-        await _publishPresence('OFFLINE');
-        await api.goOffline();
+        if (_presence.configured) {
+          await _presence.setStatus('OFFLINE');
+        } else {
+          await api.goOffline();
+        }
         status = PartnerStatus.offline;
         offers = [];
         _lastPosition = null;
         _heartbeat?.cancel();
         _heartbeat = null;
+        // Não precisa mais segurar o processo vivo: ninguém está online.
+        unawaited(_keepAlive.stop());
         _clearBreak();
         _stopPolling();
       });
 
-  /// Publica status/posição no radar. Falhas não derrubam a operação, mas
-  /// deixam um code na tela — o parceiro precisa saber que pode não aparecer.
-  Future<bool> _publishPresence(String status, {GeoPoint? at}) async {
-    // A presença principal já vai no POST /partner/online (com lat/lon), que
-    // é o que o radar do passageiro lê. A Edge Function dedicada (RADAR_BASE)
-    // é opcional: sem ela não é erro, e a tela não mostra código cru.
-    if (!_presence.configured) return true;
-    try {
-      await _presence.setStatus(status, lat: at?.lat, lon: at?.lon);
-      return true;
-    } on PresenceProblem catch (p) {
-      lastErrorCode = p.code == 'presence_unconfigured'
-          ? 'presence_unconfigured'
-          : 'presence_error';
-      return false;
-    } catch (_) {
-      lastErrorCode = 'presence_error';
-      return false;
-    }
+  /// Publica status/posição no radar. Falhas **não** são engolidas: quem
+  /// chama decide se a falha derruba a operação (ficar online — o servidor
+  /// recusou, o app não vira online) ou só vira aviso (heartbeat).
+  Future<void> _publishPresence(String status, {GeoPoint? at}) async {
+    // Sem backend de presença real não há o que publicar: quem publica é a
+    // API de demonstração (rotas `/partner/*`).
+    if (!_presence.configured) return;
+    await _presence.setStatus(status, lat: at?.lat, lon: at?.lon);
   }
 
   /// Heartbeat de 30 s (SPECS: PRM-hb.intervalo + grace de 90 s no servidor).
@@ -304,7 +348,7 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
   /// desaparece do radar e para de receber ofertas em ~1,5 min.
   void _startHeartbeat() {
     _heartbeat?.cancel();
-    _heartbeat = Timer.periodic(const Duration(seconds: 30), (_) async {
+    _heartbeat = Timer.periodic(heartbeatInterval, (_) async {
       if (_disposed || status != PartnerStatus.online) return;
       final fix = await _location.tryCurrent(
         timeout: const Duration(seconds: 6),
@@ -318,16 +362,20 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
           : _lastPosition;
       if (at == null) return;
       _lastPosition = at;
-      // Presença no servidor principal (obrigatória) e, quando configurada,
-      // a Edge Function opcional do radar.
+      // Presença no servidor: com o radar real é o Postgres que decide se o
+      // parceiro continua visível (heartbeat fresco < 90 s). Sem ele, é a
+      // rota `/partner/heartbeat` da API de demonstração.
       try {
-        await api.heartbeat([
-          {'lat': at.lat, 'lon': at.lon},
-        ]);
+        if (_presence.configured) {
+          await _publishPresence('ONLINE_DISPONIVEL', at: at);
+        } else {
+          await api.heartbeat([
+            {'lat': at.lat, 'lon': at.lon},
+          ]);
+        }
       } catch (_) {
         // Rede oscilou: o próximo pulso tenta de novo; não derruba o ONLINE.
       }
-      await _publishPresence('ONLINE_DISPONIVEL', at: at);
     });
   }
 
@@ -340,7 +388,11 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
     final at = fix != null ? GeoPoint(fix.lat, fix.lon) : _lastPosition;
     if (at == null) return;
     _lastPosition = at;
-    await _publishPresence('ONLINE_DISPONIVEL', at: at);
+    try {
+      await _publishPresence('ONLINE_DISPONIVEL', at: at);
+    } catch (_) {
+      // Melhor-esforço: o heartbeat seguinte corrige a posição.
+    }
     _startHeartbeat();
   }
 
@@ -358,27 +410,54 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     await _guard(() async {
-      final r = await api.startBreak(minutes: maxBreakMinutes);
+      DateTime startedAt;
+      DateTime expiresAt;
+      if (_presence.configured) {
+        // Postgres: a pausa é o status PAUSA. O radar não tem "pausa até",
+        // então o relógio do servidor é o do próprio heartbeat e a expiração
+        // é calculada aqui, respeitando o limite configurado (3 h).
+        final at = _lastPosition ?? await _currentPosition();
+        if (at == null) {
+          lastErrorCode = 'location_unavailable';
+          return;
+        }
+        await _presence.setStatus('PAUSA', lat: at.lat, lon: at.lon);
+        startedAt = DateTime.now();
+        expiresAt = startedAt.add(Duration(minutes: maxBreakMinutes));
+      } else {
+        // Modo demo: a API de demonstração é quem manda no relógio da pausa.
+        final r = await api.startBreak(minutes: maxBreakMinutes);
+        startedAt = r['started_at'] != null
+            ? DateTime.parse(r['started_at'] as String)
+            : DateTime.now();
+        expiresAt = r['expires_at'] != null
+            ? DateTime.parse(r['expires_at'] as String)
+            : startedAt.add(Duration(minutes: maxBreakMinutes));
+      }
       status = PartnerStatus.paused;
       _heartbeat?.cancel();
       _heartbeat = null;
-      await _publishPresence('PAUSA', at: _lastPosition);
-      _breakStartedAt = r['started_at'] != null
-          ? DateTime.parse(r['started_at'] as String)
-          : DateTime.now();
-      _breakExpiresAt = r['expires_at'] != null
-          ? DateTime.parse(r['expires_at'] as String)
-          : _breakStartedAt!.add(Duration(minutes: maxBreakMinutes));
+      _breakStartedAt = startedAt;
+      _breakExpiresAt = expiresAt;
       _startBreakTimer();
       notifyListeners();
     });
+  }
+
+  /// Posição atual do aparelho (ou a última conhecida).
+  Future<GeoPoint?> _currentPosition() async {
+    final fix = await _location.tryCurrent();
+    if (fix != null) return GeoPoint(fix.lat, fix.lon);
+    return _lastPosition;
   }
 
   /// Encerra a pausa antecipadamente e volta para ONLINE.
   Future<void> endBreak() async {
     if (status != PartnerStatus.paused) return;
     await _guard(() async {
-      await api.endBreak();
+      // Com o radar real, encerrar a pausa é voltar a publicar ONLINE — não
+      // existe rota de pausa no Postgres além do status.
+      if (!_presence.configured) await api.endBreak();
       status = PartnerStatus.online;
       _clearBreak();
       _startPolling();
@@ -406,6 +485,10 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed && status == PartnerStatus.online) {
       refreshOffers();
       _startPolling();
+      // A presença pode ter expirado enquanto o app estava congelado: o
+      // servidor só mostra quem deu sinal de vida nos últimos 90 s. Volta a
+      // bater assim que o app volta — antes disso o parceiro sumiria.
+      _resumePresence();
     }
     // O saldo só é lido com a tela do painel aberta: em background o timer
     // é suspenso (bateria) e retomado na volta.
@@ -436,6 +519,10 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
         _clearBreak();
         _startPolling();
         notifyListeners();
+        // A pausa acabou: o parceiro volta a ser visível. No modo real a
+        // presença É o status no Postgres — sem republicar ONLINE ele ficaria
+        // PAUSA para sempre (e nunca receberia oferta).
+        _resumePresence();
       } else {
         notifyListeners();
       }
@@ -460,7 +547,13 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
         _heartbeat?.cancel();
         _heartbeat = null;
         _lastPosition = null;
-        await _publishPresence('OFFLINE');
+        // A corrida começou: o parceiro não está disponível para novas
+        // chamadas. Falha ao publicar não pode desfazer o aceite.
+        try {
+          await _publishPresence('OFFLINE');
+        } catch (_) {
+          // Melhor-esforço: o servidor já sabe da corrida.
+        }
       });
 
   /// Recusa: devolve o que foi perdido (valor congelado + aceite antes/depois)
@@ -557,6 +650,9 @@ class PartnerController extends ChangeNotifier with WidgetsBindingObserver {
     _heartbeat?.cancel();
     _breakTimer?.cancel();
     stopWalletLive();
+    // O app morreu: não faz sentido segurar o processo vivo por causa da
+    // presença. `stop()` nunca lança.
+    _keepAlive.stop();
     super.dispose();
   }
 }

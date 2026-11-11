@@ -3,11 +3,14 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-/// Edge Function `radar` no Supabase. Sem backend/token, o parceiro não
-/// aparece para ninguém — e a tela avisa em vez de fingir presença.
+/// Base da Edge Function `radar` — a presença REAL do parceiro no Postgres.
+///
+/// **Vazio = sem backend de presença real**: o app não publica nada no
+/// Postgres e o fluxo de online/offline fica no backend de demonstração
+/// (modo dev/demo). O build de piloto define `RADAR_BASE`.
 const defaultRadarBase = String.fromEnvironment(
   'RADAR_BASE',
-  defaultValue: 'http://10.0.2.2:54321/functions/v1/radar',
+  defaultValue: '',
 );
 
 /// Token fixo (build de dev). Em uso normal o token vem da SESSÃO: o radar
@@ -15,6 +18,8 @@ const defaultRadarBase = String.fromEnvironment(
 /// publicar presença no nome de outro.
 const defaultRadarToken = String.fromEnvironment('RADAR_TOKEN');
 
+/// Edge Function `radar` no Supabase. Sem backend/token, o parceiro não
+/// aparece para ninguém — e a tela avisa em vez de fingir presença.
 class PresenceProblem implements Exception {
   const PresenceProblem(this.code, {this.status});
 
