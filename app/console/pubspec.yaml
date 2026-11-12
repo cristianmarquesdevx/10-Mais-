@@ -1,0 +1,28 @@
+name: console_operacao
+description: "10 é + Console — console da operação: fila do KYC, SLA e decisão."
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  intl: ^0.19.0
+  # Autenticação compartilhada (login por código de uso único, sessão e
+  # renovação automática) — a mesma fonte do passageiro e do parceiro.
+  ten_auth:
+    path: ../../packages/ten_auth
+  # Design system compartilhado (tokens, tipografia, componentes).
+  ten_design:
+    path: ../../packages/ten_design
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

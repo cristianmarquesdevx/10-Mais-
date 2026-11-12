@@ -222,4 +222,60 @@ prazo = primeiro instante ≥ (agora + PRM-kyc.sla_antecedencia_h)
   caso para a fila como `RESUBMIT`, com prazo novo (o relógio andou desde a
   última promessa) e o motivo da recusa limpo — o histórico fica no
   `audit_log`.
+- O vocabulário do motivo é **fechado** (`scripts/contract.py`:
+  `KYC_REJECTION_CODES`): `CNH_ILEGIVEL`, `CNH_VENCIDA`, `DOC_INCOMPLETO`,
+  `FOTO_INVALIDA`, `COMPROVANTE_INVALIDO`, `DADOS_DIVERGENTES`. A operação
+  **escolhe** da lista (não digita) e o parceiro recebe o código que sabe
+  corrigir.
+
+### 6.4 O console da operação (`app/console`)
+
+O console é a **superfície irmã** do passageiro e do parceiro: é onde a
+pessoa da operação lê a fila, vê o prazo e decide (`docs/PRODUTO-MESTRE.md`,
+Fase 3). Ele é um app Flutter mobile (Android/iOS), não uma página web.
+
+- **Login**: e-mail → código de 6 dígitos, como os outros apps — mas o
+  console **não cadastra conta** (`create_user: false`) e **não mexe no
+  papel** (`withRole: false`): quem opera o cadastro entra com a conta que
+  já existe. O papel vem do `users.role`, que só o trigger de identidade
+  escreve.
+- **Conferência de papel**: `GET /kyc/me` devolve `role` e `is_agent`. A tela
+  recusa na hora quem não é AGENT/ADMIN e encerra a sessão — entrar
+  "funcionando" e só falhar na fila seria pior do que não entrar.
+- **Fila** (`GET /kyc/queue`): posição, prazo (SLA), tempo de espera e
+  quantos documentos o caso tem. Os estados vazio, de erro e de recusa de
+  permissão são telas explícitas — nunca uma fila inventada.
+- **Detalhe** (`GET /kyc/cases/{caseId}`): a documentação com a marca de
+  **arquivo pendente** (documento registrado sem arquivo) e a decisão
+  (aprovar, recusar ou pedir reenvio) com a folha de motivo padronizado.
+- **Decisão** (`POST /kyc/cases/{caseId}/review`): as mesmas regras do
+  servidor — recusa e reenvio exigem `rejection_code` (422
+  `rejection_code_required`), e a decisão muda o mundo (§6.3).
+
+### 6.5 O arquivo do documento (F9): bucket privado e upload real
+
+A foto do documento **não passa pela API**: o app do parceiro sobe o arquivo
+no **Storage privado** e a API só registra o caminho.
+
+- **Bucket**: `kyc-docs`, **privado** (`public = false`) — nenhuma URL
+  anônima entrega documento de parceiro (`supabase/migrations/20261110000600_kyc_storage.sql`).
+- **Caminho do objeto**: `kyc/<partner_user_id>/pending/<doc>_<ms>.jpg`. A
+  segunda pasta é o **dono**: é dela que a RLS do bucket tira a conclusão de
+  quem pode ler e escrever (`storage.foldername(name)[2] = auth.uid()`).
+  O `pending` é a pasta de quem ainda não tem caso — o id do caso só existe
+  depois de `POST /kyc/cases`, e o upload vem **antes** para a operação
+  nunca ver um caso sem o documento que ele diz ter.
+- **O servidor confere**: o path tem que ser do próprio parceiro (422
+  `storage_path_not_owned`) e o objeto tem que **existir** no bucket (422
+  `document_not_found`). Sem Storage no banco, a API degrada com 503
+  `storage_unavailable` — em vez de estourar com "relation does not exist".
+- **Sem arquivo, o registro é honesto**: o servidor grava
+  `PENDENTE/<case>/<doc>` com `quality_flags.upload_pending = true`. O
+  console mostra **ARQUIVO PENDENTE** antes de aprovar.
+- **Qualidade da foto**: medida no cliente (Dart puro), em Dart: borrão pela
+  variância do Laplaciano e reflexo pela fração de pixels estourados. Os
+  limiares são contrato (`scripts/contract.py`: `KYC_BLUR_THRESHOLD`,
+  `KYC_GLARE_RATIO_THRESHOLD`; espelhados em
+  `app/parceiro/lib/src/media/document_quality.dart`). É **aviso**, não
+  bloqueio: quem aprova é a pessoa da operação.
 

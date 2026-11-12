@@ -54,3 +54,54 @@ KYC_REVIEW_END_H = 23
 #: Antecedência mínima do SLA (`PRM-kyc.sla_antecedencia_h`): o prazo é
 #: pelo menos X horas à frente do momento em que o caso entrou na fila.
 KYC_SLA_LEAD_H = 2
+
+# --- KYC: o Storage dos documentos -------------------------------------------
+
+#: Bucket PRIVADO onde o app do parceiro sobe a foto do documento.
+#:
+#: O bucket é privado de propósito: o GET do objeto exige JWT e política de
+#: RLS — nenhuma URL anônima entrega documento de parceiro.
+KYC_STORAGE_BUCKET = "kyc-docs"
+
+#: Prefixo da PASTA do parceiro dentro do bucket.
+#:
+#: O path do objeto é `<prefixo>/<partner_user_id>/<case_id>/<doc>_<ms>.jpg`
+#: (ex.: `kyc/<uid>/<case>/CNH_1700000000000.jpg`). A segunda pastinha é o
+#: uid do DONO: é dela que a RLS tira a conclusão de quem pode ler e escrever.
+KYC_STORAGE_PATH_PREFIX = "kyc"
+
+# --- KYC: os motivos padronizados de recusa ----------------------------------
+
+#: Motivos padronizados de recusa (e de pedido de reenvio) do KYC.
+#:
+#: Recusa sem motivo padronizado é recusa sem ação possível para o parceiro:
+#: o código é o que a tela dele mostra. O console da operação oferece esta
+#: lista (a pessoa escolhe, não digita); `scripts/test_contract.py` confere
+#: que a lista do app continua igual à daqui — um código novo entra nos dois
+#: lugares ou em nenhum.
+KYC_REJECTION_CODES = (
+    "CNH_ILEGIVEL",
+    "CNH_VENCIDA",
+    "DOC_INCOMPLETO",
+    "FOTO_INVALIDA",
+    "COMPROVANTE_INVALIDO",
+    "DADOS_DIVERGENTES",
+)
+
+# --- KYC: a qualidade da foto do documento ------------------------------------
+
+#: Limiar de BORRÃO da foto do documento (F9): a variância do Laplaciano
+#: abaixo disto é foto borrada.
+#:
+#: É uma heurística de CLIENTE (o app avisa o parceiro e mostra a medida à
+#: operação), não uma regra do servidor: quem aprova é a pessoa. O mesmo
+#: número vive em `app/parceiro/lib/src/media/document_quality.dart`
+#: (`kycBlurThreshold`), e `scripts/test_contract.py` confere que os dois
+#: continuam iguais.
+KYC_BLUR_THRESHOLD = 120
+
+#: Limiar de REFLEXO da foto do documento (F9): a fração de pixels estourados
+#: (branco queimado pelo flash) acima disto é foto com reflexo.
+#:
+#: Mesmo par com o app (`kycGlareRatioThreshold`) — ver a nota acima.
+KYC_GLARE_RATIO_THRESHOLD = 0.10
