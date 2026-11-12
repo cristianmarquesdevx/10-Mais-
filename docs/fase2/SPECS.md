@@ -250,12 +250,21 @@ Fase 3). Ele é um app Flutter mobile (Android/iOS), não uma página web.
   atualizar), de erro e de recusa de permissão são telas explícitas — nunca
   uma fila inventada. A fila **se atualiza sozinha** (polling de 30 s): uma
   fila parada, com a pessoa operando um caso, é uma fila mentirosa. Duas
-  leituras que se cruzam não podem se atropelar: a resposta mais antiga é
-  descartada (a fila mostra o retrato mais novo, não o mais velho).
+  leituras que se cruzam não podem se atropelar: a fila só é reescrita por
+  uma leitura **mais nova que a última que deu certo** — se a leitura nova
+  **falhou** e a antiga deu certo, o último retrato verdadeiro continua na
+  tela **com o aviso de erro** (trocar uma informação boa por uma tela
+  vazia seria pior). O erro só some quando um sucesso **mais novo** chega.
+  Toda leitura tem **prazo** (`ConsoleApi.requestTimeout`, 20 s): um
+  servidor mudo vira o erro `offline`, nunca um spinner eterno. O spinner
+  pertence à leitura mais recente: só ela desliga (uma leitura antiga que
+  responde não pode piscar a tela).
   O servidor ordena a fila por `(sla_due_at, created_at, id)` **antes** do
   `LIMIT`: com `LIMIT` sem `ORDER BY`, o Postgres devolvia 50 casos
   arbitrários e o caso que vence primeiro podia não aparecer — esconder
-  trabalho numa fila de atendimento.
+  trabalho numa fila de atendimento. O CI prova isso **comportamentalmente**
+  (mais de 50 casos na fila: o mais urgente tem que aparecer e em primeiro
+  lugar), não só pelo texto da migration.
 - **Detalhe** (`GET /kyc/cases/{caseId}`): a **identidade** do parceiro (nome,
   telefone e conta), a documentação com a marca de **arquivo pendente**
   (documento registrado sem arquivo) e a decisão (aprovar, recusar ou pedir
@@ -270,11 +279,21 @@ Fase 3). Ele é um app Flutter mobile (Android/iOS), não uma página web.
   nenhum é `has_file: false` — e a tela mostra **SEM ARQUIVO**. A versão
   anterior calculava pelo nome do caminho: pintava **ARQUIVO OK** (verde) e
   o preview falhava logo abaixo, duas afirmações contrárias na mesma tela
-  (`supabase/migrations/20261110000900_kyc_console_docs_fix.sql`).
+  (`supabase/migrations/20261110000900_kyc_console_docs_fix.sql`). A função
+  que pergunta ao bucket **não é pública**: `REVOKE … FROM PUBLIC, anon` +
+  `GRANT … TO authenticated, service_role` (convenção da 00600) — sem isso
+  ela virava um oráculo público de existência de documento num bucket
+  privado.
+- **O marcador legado volta como está**: um documento registrado **sem
+  objeto** tem `storage_path` = `PENDENTE/<case>/<tipo>` (a coluna é
+  `NOT NULL`) e `has_file: false`. O cliente **não** tenta baixar o
+  marcador.
 - **Campos nulos são OMITIDOS**: o detalhe é montado com
   `jsonb_strip_nulls`, então um campo nulo (`rejection_code`, `sla`,
   `partner_name`) **não vem** — não vem como `null`. O cliente trata
-  "ausente" e "nulo" igual (`docs/fase2/openapi.yaml`, `KycCase`).
+  "ausente" e "nulo" igual (`docs/fase2/openapi.yaml`, `KycCase`). A fila,
+  ao contrário, **não** usa `jsonb_strip_nulls`: lá o nulo **vem** como
+  `null` (`KycQueueItem.sla_due_at` é `nullable`).
 - **Decisão** (`POST /kyc/cases/{caseId}/review`): as mesmas regras do
   servidor — recusa e reenvio exigem `rejection_code` (422
   `rejection_code_required`), e a decisão muda o mundo (§6.3).

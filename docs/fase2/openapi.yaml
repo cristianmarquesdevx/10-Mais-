@@ -1207,29 +1207,28 @@ components:
       type: object
       description: >
         The partner's KYC case (SPECS §6). The response is built with
-        `jsonb_strip_nulls`: a nullable field that is NULL is OMITTED from
-        the JSON (not sent as `null`) — a client must treat "absent" and
-        "null" the same way (the console does).
-      required: [case_id, status]
+        `jsonb_strip_nulls`: a field that is NULL is OMITTED from the JSON
+        (it is NOT sent as `null`) — a client must treat "absent" and "null"
+        the same way (the console does). Because of that, the optional
+        fields below are NOT marked `nullable`: they are simply absent
+        when they have no value.
+      required: [case_id, status, partner_user_id]
       properties:
         case_id: { type: string, format: uuid }
         status: { type: string, enum: [AUTO_APPROVED, APPROVED, IN_REVIEW, REJECTED, RESUBMIT] }
-        position: { type: integer, nullable: true, description: 'rank in the review queue (1 = next); OMITTED when the case is not in the queue' }
+        position: { type: integer, description: 'rank in the review queue (1 = next); OMITTED when the case is not in the queue' }
         sla:
           type: string
           format: date-time
-          nullable: true
           description: deadline of the manual review (inside the human window — SPECS §6.2); OMITTED when null
-        rejection_code: { type: string, nullable: true, description: 'OMITTED when null (the case was never rejected)' }
-        decided_at: { type: string, format: date-time, nullable: true, description: 'OMITTED when null (not decided yet)' }
-        partner_user_id: { type: string, format: uuid, nullable: true, description: 'OMITTED when null' }
+        rejection_code: { type: string, description: 'OMITTED when null (the case was never rejected)' }
+        decided_at: { type: string, format: date-time, description: 'OMITTED when null (not decided yet)' }
+        partner_user_id: { type: string, format: uuid, description: 'the partner account (NOT NULL in the database — always present)' }
         partner_name:
           type: string
-          nullable: true
           description: "the partner's name (profiles.full_name) — the operation must know WHOSE registration it is judging; OMITTED when the profile has no name"
         partner_phone:
           type: string
-          nullable: true
           description: "the partner's phone (users.phone_e164) — so the operation can reach them; OMITTED when null"
         documents:
           type: array
@@ -1242,7 +1241,7 @@ components:
               storage_path:
                 type: string
                 nullable: true
-                description: "object name inside the PRIVATE bucket (kyc-docs); the client downloads it with its OWN token (Storage RLS). OMITTED when the document has no object (the legacy PENDENTE marker)"
+                description: "object name inside the PRIVATE bucket (kyc-docs); the client downloads it with its OWN token (Storage RLS). For a document registered WITHOUT an object, the server returns the LEGACY MARKER as-is (e.g. `PENDENTE/<case>/CNH`) — it is NOT a real object, and `has_file` is false for it (the client must not try to download the marker)"
               has_file:
                 type: boolean
                 description: 'the object really EXISTS in the bucket — the server asks the bucket itself (fn_kyc_storage_object_present), so a path pointing to nothing is false and the client never shows "ARQUIVO OK" for a missing file'
@@ -1259,7 +1258,11 @@ components:
         partner_name: { type: string, nullable: true, description: "the partner's name (profiles.full_name); null when the profile has no name" }
         partner_phone: { type: string, nullable: true, description: "the partner's phone (users.phone_e164); null when the account has no phone" }
         status: { type: string, enum: [IN_REVIEW, RESUBMIT] }
-        sla_due_at: { type: string, format: date-time }
+        sla_due_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 'deadline of the review; null when the case has no SLA yet'
         created_at: { type: string, format: date-time }
         position: { type: integer }
         documents: { type: integer }

@@ -401,6 +401,55 @@ path não aponta para objeto nenhum (o `has_file` honesto, visto pela
 operação) → folha de decisão → aprovação (a fila esvaziou e o
 `partners.kyc_status` = `APPROVED` no banco).
 
+### 8j. Rodada "os 8 defeitos da 2ª verificação" (12/11/2026)
+
+A **segunda** verificação adversarial do commit `24a46aa` voltou a dar
+**VERIFIED WITH CAVEATS** — e achou **8 defeitos** (F3-a…F3-h), não 6: dois
+testes **inertes** (que passavam mesmo com o defeito presente), um
+**desvio de segurança**, duas arestas de comportamento no controller e uma
+**frase falsa no contrato** — exatamente a categoria que a rodada dizia
+estar corrigindo. Todos corrigidos aqui.
+
+| Defeito | O que era | O que é agora |
+|---|---|---|
+| **F3-a — teste inerte** (🟡) | O teste do `didUpdateWidget` servia o **mesmo PNG** nos dois caminhos e só afirmava que existia uma `Image`: com o bug presente, **passava**. Provado por mutação (removendo o `didUpdateWidget`, o teste continuava verde) | Bytes **distintos** por caminho (PNG vermelho e azul) e comparação dos **bytes renderizados** (`bytesNaTela`) + um teste da **resposta atrasada do caminho antigo** (a que chega depois da troca não pode tomar a tela) |
+| **F3-b — o contrato afirmava mais do que provava** (🟡) | O `test_contract.py` exigia a **DEFINIÇÃO** de `fn_kyc_storage_object_present` — uma migration podia definí-la e nunca chamá-la (a própria mentira da F2-a) | O contrato exige o **USO** (`'has_file', fn_kyc_storage_object_present(` dentro do `api_kyc_case_get`) e **proíbe** a fórmula antiga (`NOT LIKE 'PENDENTE/%'`) |
+| **F3-c — endpoint público** (🟡) | A função nova herdava o default do Postgres (`EXECUTE TO PUBLIC`): qualquer visitante podia perguntar "esse documento existe?" — um oráculo de existência de documento num bucket **privado** | A 00900 repete o padrão da 00600: `REVOKE … FROM PUBLIC, anon` + `GRANT … TO authenticated, service_role`. Provado no banco: `proacl = {postgres=X, authenticated=X, service_role=X}` (sem PUBLIC/anon) e o CI confere o `pg_proc.proacl` |
+| **F3-d — a guarda descartava uma leitura boa** (🟡) | A comparação era com a última *tentativa*: se a leitura **nova** falhava e a **antiga** dava certo, o último retrato verdadeiro era jogado fora (tela vazia + erro) | Dois contadores: `_lastOkAttempt` (a fila só é reescrita por um sucesso **mais novo**) e `_lastErrAttempt` (o erro só é apagado por um sucesso **mais novo**). A leitura antiga que deu certo fica na tela **com o aviso** |
+| **F3-e — o spinner podia ficar preso** (🟡) | Sem prazo no cliente HTTP, uma leitura pendurada deixava a tela em "carregando" para sempre | `ConsoleApi.requestTimeout` (padrão 20 s) → `TimeoutException` vira `ApiProblem('offline')`; o prazo cobre **os cabeçalhos e o corpo** (um `.timeout` só no corpo não protegia nada). O spinner pertence à leitura mais recente: só ela desliga (sem piscar) e ela sempre termina |
+| **F3-f — frase falsa no openapi** (🟡) | "storage_path … OMITTED when the document has no object" — **falso**: o servidor devolve o marcador `PENDENTE/…` **literalmente** (a coluna é `NOT NULL`) | A descrição diz a verdade: o marcador legado volta **como está**, e o `has_file` dele é `false`. E no `KycCase` os campos nulos **não** são marcados `nullable` (eles são **omitidos** — o `nullable: true` fazia o leitor esperar uma chave com `null`) |
+| **F3-g — usuário sem recuperação** (💭) | O `errorBuilder` da imagem substituía o conteúdo do preview: quem caísse em "é imagem mas não decodifica" ficava **sem botão nenhum** (e o comentário dizia o contrário) | O `_DecodeFailed` ganhou o botão **"Tentar de novo"** (`document-retry-decode`) e o comentário foi corrigido |
+| **F3-h — duas afirmações imprecisas** (💭) | O `jsonb_agg` externo ordenava sem o desempate por `id` (empates saíam em ordem arbitrária na tela) e a frase do commit sobre o `build/` "sair do versionamento" era falsa (nunca foi versionado) | O `ORDER BY` externo usa a **mesma chave do ranking** (`sla_due_at, created_at, case_id`); a frase falsa não se repete |
+
+**Extra (não estava na lista do juiz, mas foi fechado):** o claim "a fila
+ordena antes do `LIMIT`" era provado **só por grep**. Agora o CI prova
+**comportamentalmente**: cria 61 casos, insere o **mais urgente por último**
+(a ordem do heap o deixaria fora do `LIMIT` de 50) e exige que ele esteja na
+tela **e em primeiro lugar**.
+
+| Artefato | Conteúdo |
+|---|---|
+| `supabase/migrations/20261110000900_kyc_console_docs_fix.sql` | `fn_kyc_storage_object_present` + o **revoke/grant** (convenção da 00600), `api_kyc_case_get` com o `has_file` honesto, `api_kyc_queue` com o `ORDER BY` antes do `LIMIT` e o desempate por `case_id` |
+| `app/console/lib/src/state/console_controller.dart` | Guarda em dois contadores (`_lastOkAttempt`/`_lastErrAttempt`) e o spinner com dono (a leitura mais recente) |
+| `app/console/lib/src/api/console_api.dart` | `requestTimeout` (padrão 20 s) cobrindo cabeçalhos **e** corpo |
+| `app/console/lib/src/widgets/document_preview.dart` | Botão "Tentar de novo" no aviso de decodificação (com o comentário corrigido) |
+| `app/console/test/` | **52/52** (45 + o teste do `didUpdateWidget` com bytes distintos + a resposta atrasada + a leitura boa preservada + o spinner preso + o spinner que não pisca + o botão de decodificação) |
+| `scripts/ci_migrations.sh` | Assert do `pg_proc.proacl` (sem PUBLIC/anon) e assert **comportamental** da fila (>50 casos: o mais urgente tem que aparecer e em primeiro lugar) |
+| `scripts/test_contract.py` | **37/37** (34 + o **uso** da função no `has_file` + o revoke + o assert comportamental da fila) |
+| `docs/fase2/openapi.yaml` | O marcador `PENDENTE/…` devolvido **como está**; no `KycCase` os nulos são **omitidos** (sem `nullable: true`); `KycQueueItem.sla_due_at` é `nullable` (lá o nulo **vem** como `null`) |
+
+Verificação desta rodada: `dart analyze` limpo (console + `ten_design`);
+console **52/52**; passageiro **90/90**; parceiro **139/139**; `ten_auth`
+**18/18**; `test_contract.py` **37/37**; `ci_migrations.sh` aplica **25
+migrations do zero** → "TODOS OS ASSERTS OK"; a 00900 é **idempotente**
+(3 aplicações seguidas no stack local, sem erro) e o `proacl` da função nova
+foi conferido no banco (`anon: f`, `authenticated: t`); `kyc_smoke.py` PASS
+com o `has_file` honesto provado dos dois lados; **APKs debug e release
+buildam** (release inspecionado: `uses-permission:
+name='android.permission.INTERNET'`); **prova no emulador** refeita com o
+build novo (fila → documento na tela → "SEM ARQUIVO" → folha de decisão →
+aprovação, com o banco em `APPROVED`).
+
 
 Bloqueio de ambiente (não de produto): `flutter pub get` no app parceiro
 falha neste host com "Building with plugins requires symlink support" — o

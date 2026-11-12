@@ -340,13 +340,25 @@ class ContratoTest(unittest.TestCase):
         # (verde) e o preview falhava logo abaixo — duas afirmações
         # contrárias na mesma tela.
         mig = read(self.KYC_CONSOLE_FIX_MIGRATION)
-        self.assertIn("fn_kyc_storage_object_present", mig,
-                      "o has_file não consulta o bucket")
-        self.assertIn("storage.objects", mig,
-                      "o has_file não consulta a tabela de objetos")
-        # E a função que ele usa tem que existir.
+        # A função que pergunta ao bucket tem que existir...
         self.assertIn("CREATE OR REPLACE FUNCTION fn_kyc_storage_object_present",
                       mig)
+        self.assertIn("storage.objects", mig,
+                      "o has_file não consulta a tabela de objetos")
+        # ...E TEM QUE SER USADA pelo `api_kyc_case_get` no campo `has_file`.
+        # Assert só da DEFINIÇÃO é inerte: a função existir sem ninguém
+        # chamá-la é exatamente a mentira que a 00900 veio consertar.
+        caso = mig[mig.index("CREATE OR REPLACE FUNCTION api_kyc_case_get"):]
+        caso = caso[:caso.index("END $$;")]
+        self.assertIn(
+            "'has_file', fn_kyc_storage_object_present(",
+            caso,
+            "o api_kyc_case_get não USA a função do bucket no has_file")
+        # E a mentira antiga não pode voltar: o campo não pode ser
+        # calculado pelo NOME do caminho (o assert olha só o bloco do
+        # `api_kyc_case_get` — é ali que o `has_file` é montado).
+        self.assertNotIn("NOT LIKE 'PENDENTE/%'", caso,
+                         "o has_file voltou a ser calculado pelo nome do caminho")
 
     def test_fila_ordena_antes_do_limite(self):
         # A fila tinha `LIMIT` sem `ORDER BY`: o Postgres devolvia 50
@@ -402,6 +414,38 @@ class ContratoTest(unittest.TestCase):
         self.assertIn("contract.KYC_STORAGE_BUCKET", seed)
         self.assertIn("contract.KYC_STORAGE_PATH_PREFIX", seed)
         self.assertIn("/functions/v1/kyc", seed)
+
+    def test_a_funcao_do_bucket_nao_e_publica(self):
+        # `fn_kyc_storage_object_present` vive em `public`: sem o revoke,
+        # ela é executável por PUBLIC/anon e vira um oráculo de existência
+        # de documento de parceiro (num bucket PRIVADO).
+        mig = read(self.KYC_CONSOLE_FIX_MIGRATION)
+        self.assertIn("REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon", mig,
+                      "a função do bucket não revoga PUBLIC/anon")
+        self.assertIn(
+            "GRANT EXECUTE ON FUNCTION %s TO authenticated, service_role", mig,
+            "a função do bucket não dá execute para authenticated")
+
+    def test_ci_prova_o_revoke_da_funcao_do_bucket(self):
+        # O CI precisa conferir o `pg_proc.proacl`: o revoke pode estar no
+        # arquivo e não ter sido aplicado (ou ter sido sobrescrito).
+        ci = read("scripts/ci_migrations.sh")
+        self.assertIn("fn_kyc_storage_object_present", ci,
+                      "o CI não confere as permissões da função do bucket")
+        self.assertIn("pg_proc", ci,
+                      "o CI não confere o ACL real da função")
+
+    def test_ci_prova_a_fila_ordenada_comportamentalmente(self):
+        # O `ORDER BY` antes do `LIMIT` não pode ser provado só por grep: o
+        # CI precisa criar MAIS casos que o limite e exigir que o mais
+        # urgente apareça (é o defeito que escondia trabalho).
+        ci = read("scripts/ci_migrations.sh")
+        self.assertIn("generate_series(1, 60)", ci,
+                      "o CI não cria uma fila maior que o limite")
+        self.assertIn("api_kyc_queue(50)", ci,
+                      "o CI não exercita a fila no limite")
+        self.assertIn("caso mais URGENTE", ci,
+                      "o CI não exige o caso mais urgente na tela")
 
     def test_openapi_documenta_o_documento_e_a_identidade(self):
         # O contrato publicado precisa contar o que o console consome.

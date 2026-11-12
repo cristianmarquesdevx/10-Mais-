@@ -480,4 +480,105 @@ then
   fail "sem o schema storage a API não degradou com storage_unavailable (ver o erro acima)"
 fi
 
+# 12) A função que pergunta "esse path existe?" NÃO é pública.
+#
+#     `fn_kyc_storage_object_present` vive em `public`. Sem o revoke, ela
+#     fica executável por PUBLIC/anon: qualquer visitante da API poderia
+#     perguntar "esse documento existe?" — um oráculo de existência de
+#     documento de parceiro, num bucket privado.
+if ! psql_c -At <<'SQL'
+DO $test$
+DECLARE
+  v_acl text;
+BEGIN
+  SELECT p.proacl::text INTO v_acl
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = 'fn_kyc_storage_object_present';
+  IF v_acl IS NULL THEN
+    RAISE EXCEPTION 'a função fn_kyc_storage_object_present não existe';
+  END IF;
+  IF v_acl ~* '(^|,)={1,2}/' THEN
+    RAISE EXCEPTION 'a função do bucket ainda é executável por PUBLIC: %', v_acl;
+  END IF;
+  IF v_acl ~* '(^|,)anon=' THEN
+    RAISE EXCEPTION 'a função do bucket ainda é executável por anon: %', v_acl;
+  END IF;
+  IF v_acl !~* 'authenticated=' THEN
+    RAISE EXCEPTION 'a função do bucket não dá execute para authenticated: %', v_acl;
+  END IF;
+  IF v_acl !~* 'service_role=' THEN
+    RAISE EXCEPTION 'a função do bucket não dá execute para service_role: %', v_acl;
+  END IF;
+END
+$test$;
+SQL
+then
+  fail "fn_kyc_storage_object_present está executável por PUBLIC/anon (ver o erro acima)"
+fi
+
+# 13) A fila ORDENADA de verdade (e não só no texto da migration).
+#
+#     O `ORDER BY` precisa vir ANTES do `LIMIT`: com mais casos na fila do
+#     que o limite, o caso que vence primeiro não pode ficar de fora. Este
+#     teste é COMPORTAMENTAL: ele cria 60 casos e insere o MAIS URGENTE
+#     por ÚLTIMO (a ordem do heap o deixaria fora do `LIMIT` de 50 — foi
+#     assim que o caso urgente sumiu da tela da operação).
+if ! psql_c -At <<'SQL'
+INSERT INTO users (id, phone_e164, role)
+VALUES ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', '+5596990000088', 'PARTNER')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO partners (user_id, city_id)
+VALUES ('dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        '99999999-9999-4999-8999-999999999999')
+ON CONFLICT (user_id) DO NOTHING;
+SET app.test_uid = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+-- 60 casos com prazo no FUTURO.
+INSERT INTO kyc_cases (partner_user_id, status, sla_due_at, created_at)
+SELECT 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'IN_REVIEW',
+       now() + interval '2 hours', now()
+  FROM generate_series(1, 60);
+-- O MAIS URGENTE (prazo vencido), inserido por ÚLTIMO.
+INSERT INTO kyc_cases (partner_user_id, status, sla_due_at, created_at)
+VALUES ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'IN_REVIEW',
+        now() - interval '1 hour', now());
+DO $test$
+DECLARE
+  v_fila    jsonb;
+  v_urgente uuid;
+  v_total   int;
+BEGIN
+  SELECT id INTO v_urgente
+    FROM kyc_cases
+   WHERE partner_user_id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+     AND sla_due_at < now() - interval '30 minutes';
+  IF v_urgente IS NULL THEN
+    RAISE EXCEPTION 'o caso urgente de teste não foi criado';
+  END IF;
+
+  v_fila := api_kyc_queue(50);
+  SELECT count(*) INTO v_total
+    FROM jsonb_array_elements(v_fila->'cases');
+  IF v_total <> 50 THEN
+    RAISE EXCEPTION 'a fila deveria trazer 50 casos, trouxe %', v_total;
+  END IF;
+
+  -- O caso MAIS URGENTE tem que estar na tela...
+  IF NOT EXISTS (
+       SELECT 1 FROM jsonb_array_elements(v_fila->'cases') c
+        WHERE c->>'case_id' = v_urgente::text) THEN
+    RAISE EXCEPTION 'o caso mais URGENTE ficou fora da fila (o ORDER BY precisa vir ANTES do LIMIT)';
+  END IF;
+
+  -- ...e em PRIMEIRO lugar (é o que a pessoa da operação vê no topo).
+  IF (v_fila->'cases'->0->>'case_id')::uuid <> v_urgente THEN
+    RAISE EXCEPTION 'a fila não começa pelo caso mais urgente: %', v_fila->'cases'->0;
+  END IF;
+END
+$test$;
+SQL
+then
+  fail "a fila não traz o caso mais urgente quando há mais casos que o limite (ver o erro acima)"
+fi
+
 say "TODOS OS ASSERTS OK — cadeia de deploy aplicou do zero ($count migrations)"

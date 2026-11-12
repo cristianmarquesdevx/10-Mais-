@@ -273,6 +273,7 @@ class ConsoleApi {
     required this.baseUrl,
     required this.accessToken,
     this.storageBase,
+    this.requestTimeout = const Duration(seconds: 20),
     http.Client? inner,
   }) : _http = inner ?? http.Client();
 
@@ -283,6 +284,14 @@ class ConsoleApi {
   /// chamador). Vem do build (`STORAGE_BASE`); quando não vem, é derivada
   /// da base da função — o Storage mora no mesmo host do projeto.
   final String? storageBase;
+
+  /// Quanto tempo a operação espera o servidor responder.
+  ///
+  /// Sem prazo, uma leitura pendurada deixa a tela presa no "carregando"
+  /// para sempre — e a pessoa não sabe se o servidor está fora ou lento.
+  /// Passado o prazo, a leitura vira o erro `offline` (a tela avisa e
+  /// oferece tentar de novo).
+  final Duration requestTimeout;
 
   final http.Client _http;
 
@@ -341,9 +350,16 @@ class ConsoleApi {
 
     final http.Response resp;
     try {
-      resp = await http.Response.fromStream(await _http.send(req));
+      // O prazo cobre a espera pelos CABEÇALHOS e a leitura do corpo: um
+      // `.timeout` só no `fromStream` não protege nada, porque o `send`
+      // (que é o que fica pendurado quando o servidor não responde) já
+      // esperou para sempre antes do corpo existir.
+      final streamed = await _http.send(req).timeout(requestTimeout);
+      resp = await http.Response.fromStream(streamed).timeout(requestTimeout);
     } on ApiProblem {
       rethrow;
+    } on TimeoutException {
+      throw ApiProblem(0, 'offline', 'O servidor não respondeu a tempo', '');
     } catch (e) {
       throw ApiProblem(0, 'offline', 'Sem conexão com o servidor', '$e');
     }
@@ -392,7 +408,8 @@ class ConsoleApi {
     try {
       final req = http.Request('GET', uri);
       req.headers['authorization'] = 'Bearer ${await accessToken()}';
-      final resp = await http.Response.fromStream(await _http.send(req));
+      final resp = await http.Response.fromStream(await _http.send(req))
+          .timeout(requestTimeout);
       if (resp.statusCode >= 400) return null;
       return resp.bodyBytes;
     } catch (_) {

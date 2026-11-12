@@ -135,8 +135,13 @@ class _DocumentPreviewState extends State<DocumentPreview> {
                             bytes!,
                             fit: BoxFit.cover,
                             // Um JPEG que o aparelho não decodifica não pode
-                            // virar tela branca: mostra o aviso.
-                            errorBuilder: (_, __, ___) => const _DecodeFailed(),
+                            // virar tela branca: mostra o aviso — COM o
+                            // botão de tentar de novo (a pessoa precisa
+                            // poder recuperar sem sair da tela).
+                            errorBuilder: (_, __, ___) => _DecodeFailed(
+                              t: t,
+                              onRetry: _load,
+                            ),
                           ),
                           const Positioned(
                             left: AppSpace.s,
@@ -158,14 +163,17 @@ class _DocumentPreviewState extends State<DocumentPreview> {
 /// O arquivo É imagem, mas o aparelho não conseguiu decodificar.
 ///
 /// Este aviso fica DENTRO da caixa de 200 px (é o `errorBuilder` da
-/// imagem): por isso ele é compacto e o texto corta — o botão de tentar de
-/// novo está no estado de falha do preview, logo abaixo.
+/// imagem): por isso ele é compacto e o texto corta. Mas ele TEM o botão
+/// de tentar de novo — sem ele, quem caísse aqui ficava sem nenhuma
+/// forma de recuperar sem sair da tela.
 class _DecodeFailed extends StatelessWidget {
-  const _DecodeFailed();
+  const _DecodeFailed({required this.t, required this.onRetry});
+
+  final ColorSchemeColorTokens t;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
-    final t = tokensOf(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(AppSpace.l),
@@ -181,6 +189,17 @@ class _DecodeFailed extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: AppType.label.copyWith(color: t.danger),
+              ),
+            ),
+            const SizedBox(height: AppSpace.xs),
+            TextButton.icon(
+              key: const ValueKey('document-retry-decode'),
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Tentar de novo'),
+              style: TextButton.styleFrom(
+                foregroundColor: t.ink,
+                visualDensity: VisualDensity.compact,
               ),
             ),
           ],

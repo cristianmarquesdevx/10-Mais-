@@ -53,6 +53,31 @@ END $$;
 COMMENT ON FUNCTION fn_kyc_storage_object_present(text, text) IS
   'o objeto existe no bucket? false quando o Storage nao esta instalado (degradacao, nao erro)';
 
+-- A função é de **leitura de metadado do bucket**, e o bucket é PRIVADO.
+-- Sem o revoke, ela fica executável por PUBLIC/anon: qualquer visitante
+-- da API poderia perguntar "esse path existe?" e transformar a função em
+-- oráculo de existência de documento de parceiro (mesmo que a RLS do
+-- `storage.objects` devolva 0 linhas para quem não é dono — o endpoint
+-- público em si é que não devia existir).
+--
+-- A 00600 já faz esse revoke para as funções do KYC; a 00900 repete o
+-- padrão para a função nova (mesmo `DO` sobre `pg_proc`, que é
+-- idempotente).
+DO $$
+DECLARE f record;
+BEGIN
+  FOR f IN
+    SELECT p.oid::regprocedure AS sig
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname = 'fn_kyc_storage_object_present'
+  LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon', f.sig);
+    EXECUTE format(
+      'GRANT EXECUTE ON FUNCTION %s TO authenticated, service_role', f.sig);
+  END LOOP;
+END $$;
+
 -- -----------------------------------------------------------------------------
 -- 2. O caso com a documentação — agora com o `has_file` HONESTO.
 --
@@ -145,7 +170,10 @@ BEGIN
     RAISE EXCEPTION 'forbidden' USING ERRCODE = '42501';
   END IF;
 
-  SELECT COALESCE(jsonb_agg(row_to_json(q) ORDER BY q.sla_due_at, q.created_at), '[]'::jsonb)
+  -- A ordenação FINAL (o `jsonb_agg` externo) usa a MESMA chave do
+  -- ranking: prazo, entrada e id. Sem o `q.id`, dois casos com o mesmo
+  -- prazo e a mesma hora de entrada saíam em ordem arbitrária na tela.
+  SELECT COALESCE(jsonb_agg(row_to_json(q) ORDER BY q.sla_due_at, q.created_at, q.case_id), '[]'::jsonb)
     INTO v_out
     FROM (
       SELECT c.id AS case_id,

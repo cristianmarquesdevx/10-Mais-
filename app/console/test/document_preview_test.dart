@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -20,6 +21,17 @@ void main() {
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   );
 
+  /// Dois PNGs 1×1 de cores DIFERENTES — para o teste distinguir DOIS
+  /// documentos pelos BYTES que a tela está exibindo (com o mesmo PNG nos
+  /// dois, o teste passaria mesmo sem recarregar: a imagem antiga ficaria
+  /// na tela e o teste não veria a diferença).
+  final vermelho = base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+  );
+  final azul = base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC',
+  );
+
   ConsoleApi apiQueDevolve(Map<String, Uint8List> porPath) => ConsoleApi(
         baseUrl: 'http://host/functions/v1/kyc',
         accessToken: () async => 'jwt',
@@ -38,6 +50,13 @@ void main() {
         theme: buildLightTheme(),
         home: Scaffold(body: child),
       );
+
+  /// Os bytes que a tela está EXIBINDO (o `Image.memory` que está no build).
+  Uint8List? bytesNaTela(WidgetTester tester) {
+    final image = tester.widget<Image>(find.byType(Image));
+    final memory = image.image as MemoryImage;
+    return memory.bytes;
+  }
 
   testWidgets('o preview baixa o arquivo e mostra a imagem', (tester) async {
     final api = apiQueDevolve({'/a.png': png});
@@ -61,7 +80,7 @@ void main() {
     final api = apiQueDevolve({});
 
     await tester.pumpWidget(
-      monta(DocumentPreview(api: api, path: 'a.jpg', label: 'CNH')),
+      monta(DocumentPreview(api: api, path: 'a.png', label: 'CNH')),
     );
     await tester.pumpAndSettle();
 
@@ -72,11 +91,11 @@ void main() {
 
   testWidgets('conteúdo que não é imagem também é FALHA', (tester) async {
     final api = apiQueDevolve({
-      '/a.jpg': Uint8List.fromList([0x00, 0x01, 0x02, 0x03]),
+      '/a.png': Uint8List.fromList([0x00, 0x01, 0x02, 0x03]),
     });
 
     await tester.pumpWidget(
-      monta(DocumentPreview(api: api, path: 'a.jpg', label: 'CNH')),
+      monta(DocumentPreview(api: api, path: 'a.png', label: 'CNH')),
     );
     await tester.pumpAndSettle();
 
@@ -86,9 +105,13 @@ void main() {
 
   testWidgets('trocar o caminho recarrega (o preview não vira a foto antiga)',
       (tester) async {
+    // Bytes DIFERENTES por path: com o mesmo PNG nos dois, o teste passaria
+    // mesmo sem o `didUpdateWidget` (a imagem antiga continuaria na tela e
+    // o `find.byType(Image)` acharia uma imagem) — o teste precisa poder
+    // FALHAR.
     final api = apiQueDevolve({
-      '/a.png': png,
-      '/b.png': png,
+      '/a.png': vermelho,
+      '/b.png': azul,
     });
 
     await tester.pumpWidget(
@@ -96,6 +119,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Toque para ampliar'), findsOneWidget);
+    expect(bytesNaTela(tester), vermelho);
 
     // O mesmo widget, outro documento: o preview tem que buscar o NOVO
     // (sem `didUpdateWidget`, a tela mostraria a foto antiga com o rótulo
@@ -106,7 +130,66 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Toque para ampliar'), findsOneWidget);
-    expect(find.byType(Image), findsOneWidget);
+    expect(bytesNaTela(tester), azul,
+        reason: 'o preview continuou com os bytes do documento anterior');
+  });
+
+  testWidgets('a resposta atrasada do caminho ANTIGO não vira a imagem',
+      (tester) async {
+    // O download do documento A é lento; a pessoa troca para o documento B
+    // (que responde rápido). Quando A chega por último, ele NÃO pode
+    // virar a imagem da tela — a tela está mostrando o B.
+    final aLiberado = Completer<void>();
+    final api = ConsoleApi(
+      baseUrl: 'http://host/functions/v1/kyc',
+      accessToken: () async => 'jwt',
+      inner: MockClient((req) async {
+        if (req.url.path.endsWith('/a.png')) {
+          await aLiberado.future;
+          return http.Response.bytes(vermelho, 200);
+        }
+        return http.Response.bytes(azul, 200);
+      }),
+    );
+
+    await tester.pumpWidget(
+      monta(DocumentPreview(api: api, path: 'a.png', label: 'CNH')),
+    );
+    await tester.pump(); // a requisição do A sai, mas não volta
+
+    // A pessoa troca para o B.
+    await tester.pumpWidget(
+      monta(DocumentPreview(api: api, path: 'b.png', label: 'CRLV')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(bytesNaTela(tester), azul,
+        reason: 'o documento B não foi o que ficou na tela');
+
+    // A resposta atrasada do A chega agora.
+    aLiberado.complete();
+    await tester.pumpAndSettle();
+
+    expect(bytesNaTela(tester), azul,
+        reason: 'a resposta atrasada do documento anterior tomou a tela');
+  });
+
+  testWidgets('o botão de tentar de novo existe quando a imagem não decodifica',
+      (tester) async {
+    // Um arquivo que PASSA pela validação de "é imagem" (cabeçalho PNG),
+    // mas que o decodificador não abre: o aviso aparece DENTRO da caixa
+    // do preview — e precisa ter como recuperar.
+    final api = apiQueDevolve({
+      '/a.png': Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A]),
+    });
+
+    await tester.pumpWidget(
+      monta(DocumentPreview(api: api, path: 'a.png', label: 'CNH')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Este arquivo não pôde ser aberto.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('document-retry-decode')), findsOneWidget);
   });
 
   testWidgets('o preview não quebra em 360x800 com a fonte em 2.0',
