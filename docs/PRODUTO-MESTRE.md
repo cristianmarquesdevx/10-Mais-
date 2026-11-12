@@ -238,7 +238,7 @@ Se um passe de R$ 10/12h gerar ~15 corridas, custo variável (~R$ 7,50) consome 
 
 **GATE 2 APROVADO** — orçamento fechado após revisão com o simulador de despacho da SPECS (ver CUSTO-CAPACIDADE.md §1.1) e cadeia `0001→0005` em script único de CI (`scripts/ci_db_suite.sh` + workflow `.github/workflows/db-suite.yml`).
 
-**Fase 3 (em andamento):** telas do app passageiro em Flutter sobre o contrato `openapi.yaml` + app parceiro + console operação; bloqueios externos do §9 permanecem.
+**Fase 3 (em andamento):** telas do app passageiro em Flutter sobre o contrato `openapi.yaml` + app parceiro + **console da operação** (fila do KYC, SLA e decisão) + **câmera do parceiro** (F9); bloqueios externos do §9 permanecem.
 
 ### 8d. Fase 3 — entrega parcial: app passageiro (MVP-A)
 
@@ -301,6 +301,39 @@ está em [`docs/REVISAO-FABLE.md`](REVISAO-FABLE.md). O `openapi.yaml` foi
 alinhado aos endpoints da Fase 3 (perfil, convites, raspadinha, pausa e
 radar), passou no validador OpenAPI 3.0 e teve 14 respostas reais da demo
 validadas contra os schemas.
+
+### 8g. Bloco 1 do KYC: console da operação + câmera (F9) (11–12/11/2026)
+
+O KYC do parceiro deixou de ser "o parceiro preenche e alguém vê": o
+cadastro virou uma **fila com SLA e decisão**, e existem duas superfícies
+novas — o **console da operação** (onde a fila é lida e a decisão é tomada)
+e a **câmera do parceiro** (onde o documento é fotografado e enviado de
+verdade).
+
+| Artefato | Conteúdo |
+|---|---|
+| `app/console/` | **Console da operação** (Flutter mobile, Android/iOS): login por código de uso único (sem auto-cadastro e sem mexer no papel), conferência de papel (`GET /kyc/me`), fila (posição, SLA, documentos), detalhe do caso (documentação + marca de **ARQUIVO PENDENTE**) e decisão (aprovar/recusar/pedir reenvio com folha de motivo padronizado). `dart analyze` limpo, **22/22 testes** |
+| `packages/ten_auth/` | **Fonte única do login** dos três apps (passageiro, parceiro, console): `AuthService` extraído das duas cópias, `sendCode(createUser:, withRole:)`, `accountId()`. **15/15 testes**; passageiro **90/90**, parceiro **139/139** |
+| `supabase/migrations/20261110000600_kyc_storage.sql` | Bucket **privado** `kyc-docs` + 4 políticas de RLS (dono = 2ª pasta do path) + `api_kyc_case_document` conferindo dono e existência do objeto (422 `storage_path_not_owned` / `document_not_found`, 503 `storage_unavailable`) |
+| `supabase/migrations/20261110000700_kyc_console.sql` | `api_kyc_me()` — o papel da conta vem do `users.role` (que só o trigger escreve) |
+| `app/parceiro/lib/src/media/` | **Câmera nativa** (plugin `camera`, com stub honesto onde não há câmera) + **captura guiada** com medição de borrão/reflexo em Dart puro; upload **real** do arquivo no bucket privado antes do registro do documento |
+| `scripts/contract.py` + `scripts/test_contract.py` | Contrato como fonte única: bucket, prefixo do path, motivos de recusa e limiares de qualidade. **21/21 testes** |
+| `scripts/kyc_smoke.py` | Smoke do KYC no Postgres **com upload real** no bucket + 2 casos negativos (path alheio, objeto inexistente) + a conferência de papel (`/me`) |
+
+Verificação desta rodada: `ci_migrations.sh` aplica **23 migrations do zero**
+e fecha com "TODOS OS ASSERTS OK"; `kyc_smoke.py` PASS (re-executável);
+`GET /kyc/me` provado no stack local (AGENT → `is_agent: true`, PARTNER →
+`false`); upload no bucket privado provado com POST **e** PUT usando só o
+JWT do parceiro; **os dois APKs debug buildam** — parceiro em 282,5 s (com
+`android.permission.CAMERA` no manifesto) e console em 83,4 s
+(`app.dezemais.console_operacao`, rótulo "10 é + Console").
+
+Bloqueio de ambiente (não de produto): `flutter pub get` no app parceiro
+falha neste host com "Building with plugins requires symlink support" — o
+plugin `camera` é novo e o Flutter injeta plugins para **Windows**, que
+exige symlink (admin/Developer Mode; não há admin nesta máquina). Não
+afeta Android/iOS/web: o Gradle usa `.flutter-plugins-dependencies`, sem
+symlink — e o APK do Android **compila** com a câmera dentro.
 
 ## 9. Pendências externas (bloqueios de lançamento)
 

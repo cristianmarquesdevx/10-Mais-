@@ -59,10 +59,21 @@ jobs:
           dart analyze
           flutter test
 
+      # Autenticação compartilhada: a fonte única do login dos três apps
+      # (passageiro, parceiro e console da operação). O pacote prova sozinho
+      # que o fluxo de código de uso único não divergiu entre as cópias
+      # antigas.
+      - name: Autenticação compartilhada — análise e testes
+        working-directory: packages/ten_auth
+        run: |
+          flutter pub get
+          dart analyze
+          flutter test
+
       - name: Apps — análise e testes
         run: |
           set -euo pipefail
-          for app in passageiro parceiro; do
+          for app in passageiro parceiro console; do
             echo "::group::$app"
             cd "app/$app"
             flutter pub get
