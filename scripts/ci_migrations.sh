@@ -11,9 +11,11 @@
 #      ON_ERROR_STOP (SQL inválido ou erro de execução aborta na hora).
 #   2. O schema `auth` do GoTrue é stubado (scripts/supabase_auth_stub.sql):
 #      fora do Supabase, as migrations de identidade precisam da tabela.
-#   3. As funções que as Edge Functions chamam existem com a assinatura
+#   3. O schema `storage` do Storage é stubado (scripts/supabase_storage_stub.sql):
+#      fora do Supabase, a migration do KYC precisa do bucket e das políticas.
+#   4. As funções que as Edge Functions chamam existem com a assinatura
 #      esperada — a função `rides` quebra se o PostgREST não achar o RPC.
-#   4. A cotação congelada existe (tabela + funções) e o despacho usa o
+#   5. A cotação congelada existe (tabela + funções) e o despacho usa o
 #      código de serviço real (RIDE_CAR), não o nome legado de moto.
 #
 # Ambiente: container efêmero PostGIS 16 (descartado ao fim, salvo KEEP_DB=1).
@@ -74,6 +76,13 @@ run_file() {
 # O schema `auth` é do GoTrue: fora do Supabase, ele é stubado para que as
 # migrations de identidade (trigger auth.users → users/profiles) apliquem.
 run_file "$ROOT/scripts/supabase_auth_stub.sql"
+
+# O schema `storage` é do Storage (serviço de arquivos): fora do Supabase, ele
+# é stubado para que a migration do KYC (bucket privado + RLS por dono +
+# conferência do objeto no bucket) aplique. O stub precisa vir ANTES das
+# migrations: as políticas usam `storage.foldername`, que só existe depois
+# dele.
+run_file "$ROOT/scripts/supabase_storage_stub.sql"
 
 # A cadeia de deploy, em ordem de nome (timestamp no prefixo).
 count=0
@@ -168,6 +177,10 @@ check_sig api_kyc_case_get 1 1
 check_sig api_kyc_case_document 5 1
 check_sig api_kyc_queue 1 1
 check_sig api_kyc_review 4 1
+# O console da operação confere o PAPEL da conta antes da fila: a função
+# `api_kyc_me` é a fonte da verdade (vem do `users.role`, que só o trigger
+# escreve). Sem ela, a rota `/me` do console quebra em produção.
+check_sig api_kyc_me 0 1
 
 # A aprovação MANUAL precisa caber no vocabulário do caso: sem ela, a fila
 # humana não tem destino no banco (o caso aprovado não pode ser gravado).
@@ -195,5 +208,187 @@ sla=$(psql_c -Atc "
               THEN 'ok' ELSE 'fora: ' || due::text END
     FROM d" | tail -1)
 [ "$sla" = "ok" ] || fail "o SLA do KYC não respeitou a janela/antecedência da cidade ($sla)"
+
+# 8) O Storage do KYC: bucket privado, RLS por dono e referência verificada.
+#
+# O documento do parceiro é um arquivo de verdade: o bucket é privado, cada
+# um só enxerga a própria pasta (`kyc/<uid>/...`) e o servidor recusa uma
+# referência que não aponta para um objeto existente.
+bucket_public=$(psql_c -Atc "SELECT public FROM storage.buckets WHERE id = 'kyc-docs'" | tail -1)
+[ "$bucket_public" = "f" ] \
+  || fail "o bucket kyc-docs não existe ou não é privado (public = '$bucket_public')"
+
+pol=$(psql_c -Atc "SELECT count(*) FROM pg_policies
+                   WHERE schemaname = 'storage' AND tablename = 'objects'
+                     AND policyname IN ('kyc_docs_select','kyc_docs_insert',
+                                        'kyc_docs_update','kyc_docs_delete')" | tail -1)
+[ "$pol" = "4" ] || fail "faltam políticas de RLS do bucket kyc-docs ($pol/4)"
+
+# A política precisa restringir ao bucket E ao dono — uma policy "USING (true)"
+# passaria no count acima e abriria a pasta de todo mundo.
+qual=$(psql_c -Atc "SELECT qual FROM pg_policies
+                    WHERE schemaname = 'storage' AND tablename = 'objects'
+                      AND policyname = 'kyc_docs_select'" | tail -1)
+echo "$qual" | grep -q "kyc-docs" \
+  || fail "a política de leitura do KYC não restringe ao bucket kyc-docs ($qual)"
+echo "$qual" | grep -q "auth.uid()" \
+  || fail "a política de leitura do KYC não restringe ao dono (auth.uid()) ($qual)"
+
+# 9) O comportamento FUNCIONAL do Storage do KYC.
+#
+# No CI, `auth.uid()` é o stub da migration `20261024000200_rls_states_events.sql`
+# (ele lê a GUC `app.test_uid`) — o mesmo gancho do `request.jwt.claims` do
+# GoTrue em produção. Dá para chamar a API COMO O PARCEIRO e provar o que
+# importa: path de outro dono é recusado, path de objeto inexistente é
+# recusado, path de objeto existente é aceito, e o modo sem path (demo) segue
+# gravando o marcador honesto `PENDENTE/...`.
+if ! psql_c -At <<'SQL'
+DO $test$
+DECLARE
+  v_uid    uuid := 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  v_outro  uuid := 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  v_cidade uuid := '99999999-9999-4999-8999-999999999999';
+  v_case   uuid;
+  v_path   text;
+  v_state  text;
+  v_msg    text;
+  v_ok     boolean;
+  v_doc    record;
+BEGIN
+  -- A identidade do chamador (no CI: a GUC `app.test_uid`).
+  PERFORM set_config('app.test_uid', v_uid::text, false);
+
+  INSERT INTO users (id, phone_e164, role)
+  VALUES (v_uid, '+5596990000077', 'PARTNER')
+  ON CONFLICT (id) DO NOTHING;
+
+  INSERT INTO partners (user_id, city_id)
+  VALUES (v_uid, v_cidade)
+  ON CONFLICT (user_id) DO NOTHING;
+
+  INSERT INTO kyc_cases (partner_user_id, status)
+  VALUES (v_uid, 'IN_REVIEW')
+  RETURNING id INTO v_case;
+
+  v_path := 'kyc/' || v_uid::text || '/' || v_case::text || '/CNH_1700000000000.jpg';
+
+  -- O objeto existe no bucket (o stub do Storage).
+  INSERT INTO storage.objects (bucket_id, name, owner)
+  VALUES ('kyc-docs', v_path, v_uid);
+
+  -- (1) Path de OUTRO dono -> recusado.
+  v_ok := false; v_state := ''; v_msg := '';
+  BEGIN
+    PERFORM api_kyc_case_document(v_case, 'CNH',
+      'kyc/' || v_outro::text || '/' || v_case::text || '/CNH_1.jpg');
+  EXCEPTION WHEN others THEN
+    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+    v_ok := true;
+  END;
+  IF NOT v_ok THEN
+    RAISE EXCEPTION 'o path de outro dono foi ACEITO (deveria recusar)';
+  END IF;
+  IF v_state <> '22023' OR v_msg NOT LIKE '%storage_path_not_owned%' THEN
+    RAISE EXCEPTION 'path de outro dono: esperava 22023/storage_path_not_owned, veio % / %',
+      v_state, v_msg;
+  END IF;
+
+  -- (2) Path do dono, objeto INEXISTENTE -> recusado.
+  v_ok := false; v_state := ''; v_msg := '';
+  BEGIN
+    PERFORM api_kyc_case_document(v_case, 'CRLV',
+      'kyc/' || v_uid::text || '/' || v_case::text || '/CRLV_1700000000001.jpg');
+  EXCEPTION WHEN others THEN
+    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+    v_ok := true;
+  END;
+  IF NOT v_ok THEN
+    RAISE EXCEPTION 'o path de objeto inexistente foi ACEITO (deveria recusar)';
+  END IF;
+  IF v_state <> '22023' OR v_msg NOT LIKE '%document_not_found%' THEN
+    RAISE EXCEPTION 'path de objeto inexistente: esperava 22023/document_not_found, veio % / %',
+      v_state, v_msg;
+  END IF;
+
+  -- (3) Path do dono, objeto EXISTENTE -> aceito, com `upload_pending` falso
+  --     e as flags de qualidade do app preservadas.
+  PERFORM api_kyc_case_document(v_case, 'CNH', v_path, NULL,
+                                 '{"blur": false, "reflexo": true}'::jsonb);
+  SELECT storage_path, quality_flags INTO v_doc
+    FROM kyc_documents
+   WHERE case_id = v_case AND doc_type = 'CNH'
+   ORDER BY created_at DESC LIMIT 1;
+  IF v_doc.storage_path <> v_path THEN
+    RAISE EXCEPTION 'o path aceito não foi gravado: %', v_doc.storage_path;
+  END IF;
+  IF (v_doc.quality_flags->>'upload_pending')::boolean IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'upload_pending deveria ser false no path real: %', v_doc.quality_flags;
+  END IF;
+  IF (v_doc.quality_flags->>'reflexo')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'a flag de qualidade do app foi perdida: %', v_doc.quality_flags;
+  END IF;
+
+  -- (4) Sem path (modo demo/legado) -> continua o registro honesto.
+  PERFORM api_kyc_case_document(v_case, 'SELFIE', NULL);
+  SELECT storage_path, quality_flags INTO v_doc
+    FROM kyc_documents
+   WHERE case_id = v_case AND doc_type = 'SELFIE'
+   ORDER BY created_at DESC LIMIT 1;
+  IF v_doc.storage_path NOT LIKE 'PENDENTE/%' THEN
+    RAISE EXCEPTION 'o modo sem path não gravou o marcador PENDENTE: %', v_doc.storage_path;
+  END IF;
+  IF (v_doc.quality_flags->>'upload_pending')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'no modo sem path, upload_pending deveria ser true: %', v_doc.quality_flags;
+  END IF;
+END
+$test$;
+SQL
+then
+  fail "a API do KYC não comportou o Storage como o contrato exige (ver o erro acima)"
+fi
+
+# 10) A degradação honesta: sem o schema `storage`, uma referência real não
+#     pode ser validada — e o servidor precisa dizer isso (503
+#     `storage_unavailable`), não estourar "relation does not exist".
+if ! psql_c -At <<'SQL'
+INSERT INTO users (id, phone_e164, role)
+VALUES ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', '+5596990000077', 'PARTNER')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO partners (user_id, city_id)
+VALUES ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', '99999999-9999-4999-8999-999999999999')
+ON CONFLICT (user_id) DO NOTHING;
+BEGIN;
+ALTER TABLE storage.objects RENAME TO objects_fora_do_ci;
+SET app.test_uid = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+DO $test$
+DECLARE
+  v_case  uuid;
+  v_state text;
+  v_msg   text;
+  v_ok    boolean := false;
+BEGIN
+  INSERT INTO kyc_cases (partner_user_id, status)
+  VALUES ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'IN_REVIEW')
+  RETURNING id INTO v_case;
+  BEGIN
+    PERFORM api_kyc_case_document(v_case, 'CNH',
+      'kyc/cccccccc-cccc-4ccc-8ccc-cccccccccccc/' || v_case::text || '/CNH_1.jpg');
+  EXCEPTION WHEN others THEN
+    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+    v_ok := true;
+  END;
+  IF NOT v_ok THEN
+    RAISE EXCEPTION 'sem o schema storage a API aceitou o path (deveria degradar)';
+  END IF;
+  IF v_state <> '22023' OR v_msg NOT LIKE '%storage_unavailable%' THEN
+    RAISE EXCEPTION 'esperava 22023/storage_unavailable, veio % / %', v_state, v_msg;
+  END IF;
+END
+$test$;
+ROLLBACK;
+SQL
+then
+  fail "sem o schema storage a API não degradou com storage_unavailable (ver o erro acima)"
+fi
 
 say "TODOS OS ASSERTS OK — cadeia de deploy aplicou do zero ($count migrations)"

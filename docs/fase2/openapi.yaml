@@ -17,12 +17,22 @@ info:
         `/offers*`, `/partner/transitions`, `/payments/ride`. These are the
         routes of the ride cycle — the source of truth is the database
         (`api_*` / `fn_*`), and the function is a thin facade.
-      - Postgres-backed (Edge Function `kyc`): `/kyc/cases*`, `/kyc/queue` —
-        the partner's registration: queue, SLA and the operation's decision
-        (SPECS §6). The function is addressed by its name
+      - Postgres-backed (Edge Function `kyc`): `/kyc/cases*`, `/kyc/queue`,
+        `/kyc/me` — the partner's registration: queue, SLA and the operation's
+        decision (SPECS §6). The function is addressed by its name
         (`/functions/v1/kyc/<path>`).
       - Still on the demo API (migrates later): profile, wallet, passes,
         preferences, performance, heatmap, nearby, support, invites, scratch.
+
+    THE DOCUMENT FILES (F9) live in the private Supabase Storage bucket
+    `kyc-docs` — NOT in this API: the partner uploads the photo directly to
+    the Storage REST (`PUT {SUPABASE_URL}/storage/v1/object/kyc-docs/<path>`,
+    with the caller's JWT), and the API only RECORDS the path
+    (`POST /kyc/cases/{caseId}/documents`). The bucket is private by
+    design: the object path is `kyc/<partner_user_id>/pending/<doc>_<ms>.jpg`
+    and the bucket's RLS only lets the owner of that folder read or write it.
+    The server checks the path (owner) and the object (existence) before
+    accepting the record.
 
     The `rides` function is addressed BY ITS NAME: `/functions/v1/rides/<path>`.
     The historical `/functions/v1/v1/<path>` never resolved — the Kong route
@@ -877,6 +887,14 @@ paths:
         The case goes back to the queue as RESUBMIT with a NEW deadline (the
         clock moved since the last promise); the rejection code is cleared
         and the history stays in `audit_log`.
+        The document may carry the PRIVATE storage path of the uploaded file
+        (`storage_path`) and the client-side quality measurement
+        (`quality_flags`). When the path is present the server REQUIRES it
+        to be under `kyc/<caller uid>/` (422 `storage_path_not_owned`) and to
+        point to an object that EXISTS in the private bucket `kyc-docs`
+        (422 `document_not_found`). Without the path the server keeps the
+        honest record (`PENDENTE/<case>/<doc>` with
+        `quality_flags.upload_pending = true`).
       parameters: [{ name: caseId, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody:
         required: false
@@ -889,9 +907,19 @@ paths:
                 storage_path:
                   type: string
                   nullable: true
-                  description: private storage path (signed URL); absent while the camera module is pending
+                  description: >
+                    PRIVATE storage path of the uploaded file, in the private
+                    bucket `kyc-docs`: `kyc/<partner_user_id>/pending/<doc>_<ms>.jpg`
+                    (the owner's folder is what the bucket's RLS checks).
+                    Absent while the camera module is pending.
                 expires_at: { type: string, format: date, nullable: true }
-                quality_flags: { type: object, additionalProperties: true }
+                quality_flags:
+                  type: object
+                  additionalProperties: true
+                  description: >
+                    The client-side measurement of the photo (blur/glare and
+                    their scores). The operation reads the NUMBER, not the
+                    opinion — the decision is still human.
       responses:
         '201':
           description: Queued for re-analysis
@@ -900,6 +928,8 @@ paths:
               schema: { $ref: '#/components/schemas/KycCase' }
         '403': { $ref: '#/components/responses/Problem' }   # forbidden
         '409': { $ref: '#/components/responses/Problem' }   # kyc_already_approved
+        '422': { $ref: '#/components/responses/Problem' }   # storage_path_not_owned / document_not_found
+        '503': { $ref: '#/components/responses/Problem' }   # storage_unavailable
 
   /kyc/cases/{caseId}/review:
     post:
@@ -921,7 +951,17 @@ paths:
               required: [decision]
               properties:
                 decision: { type: string, enum: [APPROVED, REJECTED, RESUBMIT] }
-                rejection_code: { type: string, nullable: true, example: CNH_ILEGIVEL }
+                rejection_code:
+                  type: string
+                  nullable: true
+                  example: CNH_ILEGIVEL
+                  description: >
+                    Standardized reason (REQUIRED for REJECTED/RESUBMIT). The
+                    vocabulary is closed and lives in `scripts/contract.py`
+                    (KYC_REJECTION_CODES): CNH_ILEGIVEL, CNH_VENCIDA,
+                    DOC_INCOMPLETO, FOTO_INVALIDA, COMPROVANTE_INVALIDO,
+                    DADOS_DIVERGENTES. The operation CHOOSES from the list —
+                    the partner is told what to fix.
                 note: { type: string, nullable: true }
       responses:
         '200':
@@ -961,6 +1001,30 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/KycQueueItem' }
         '403': { $ref: '#/components/responses/Problem' }   # forbidden
+
+  /kyc/me:
+    get:
+      summary: Who is logged in and their role (the console's entry check)
+      description: >
+        The operation console (app/console) checks the role BEFORE showing
+        the queue: a partner who types the operation's e-mail sees the
+        refusal on the screen, not an empty queue. The role comes from
+        `users.role` — written only by the identity trigger, never by a
+        request body.
+      responses:
+        '200':
+          description: The caller
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, role, is_agent]
+                properties:
+                  user_id: { type: string, format: uuid }
+                  email: { type: string, nullable: true }
+                  role: { type: string, enum: [PASSENGER, PARTNER, AGENT, ADMIN] }
+                  is_agent: { type: boolean, description: 'true for AGENT/ADMIN — opens the queue' }
+        '401': { $ref: '#/components/responses/Problem' }   # unauthenticated
 
 components:
   securitySchemes:

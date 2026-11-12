@@ -15,9 +15,15 @@ Valida, na ordem:
    5. a operação (papel AGENT) vê a fila e decide;
    6. recusa sem motivo padronizado é recusada (422);
    7. a recusa libera o reenvio do documento (RESUBMIT) e o caso volta à fila;
-   8. a aprovação muda `partners.kyc_status` para APPROVED — o gate do app
+   8. o documento de VERDADE: o parceiro sobe o arquivo no bucket privado
+      (`kyc/<uid>/<case>/<doc>_<ms>.jpg`) pelo REST do Storage, registra a
+      referência e o servidor confirma que o objeto EXISTE
+      (`upload_pending` = false). Path de outro uid é recusado (422
+      `storage_path_not_owned`) e path de objeto inexistente também (422
+      `document_not_found`);
+   9. a aprovação muda `partners.kyc_status` para APPROVED — o gate do app
       (só parceiro aprovado fica online) passa a valer;
-   9. o rastro existe: `audit_log`, notificação e evento `kyc.decided`.
+  10. o rastro existe: `audit_log`, notificação e evento `kyc.decided`.
 
 O SLA é conferido no SERVIDOR: o prazo tem de cair dentro da janela humana
 de revisão (7h-23h no fuso da praça) e respeitar a antecedência mínima.
@@ -41,6 +47,7 @@ import urllib.request
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import contract  # noqa: E402
 from dev_jwt import sign  # noqa: E402
 
 # Fuso da praça piloto. Porto Velho é UTC-4 o ano inteiro (o Brasil acabou
@@ -105,6 +112,47 @@ def expect(cond: bool, label: str) -> None:
     if not cond:
         raise AssertionError(label)
     print(f"  ok  {label}")
+
+
+# Um JPEG mínimo (1x1, sem imagem decodificável): o que o servidor confere é
+# a EXISTÊNCIA do objeto, não o conteúdo da foto.
+JPEG_MINIMO = bytes.fromhex(
+    "ffd8ffe000104a46494600010100000100010000ffd9")
+
+
+def upload_object(base: str, bucket: str, path: str, jwt: str) -> int:
+    """Sobe um objeto no bucket pelo REST do Storage (o caminho do app).
+
+    `POST {SUPABASE_URL}/storage/v1/object/{bucket}/{path}` com o JWT do
+    parceiro: o bucket é privado, então quem sobe é o dono da pasta — a RLS
+    do `storage.objects` recusa o resto.
+    """
+    url = f"{base}/storage/v1/object/{bucket}/{path}"
+    req = urllib.request.Request(url, data=JPEG_MINIMO, method="POST")
+    req.add_header("authorization", f"Bearer {jwt}")
+    req.add_header("content-type", "image/jpeg")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        print(f"       upload falhou: {exc.code} {raw}", file=sys.stderr)
+        return exc.code
+
+
+def delete_object(base: str, bucket: str, path: str, jwt: str) -> None:
+    """Apaga o objeto de teste (o smoke é re-executável: não deixa lixo)."""
+    url = f"{base}/storage/v1/object/{bucket}/{path}"
+    req = urllib.request.Request(url, method="DELETE")
+    req.add_header("authorization", f"Bearer {jwt}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+    except urllib.error.HTTPError:
+        pass  # objeto já não existe: o objetivo (não deixar lixo) está cumprido
+    except urllib.error.URLError:
+        pass
 
 
 def header(headers: dict, name: str) -> str | None:
@@ -180,6 +228,10 @@ def main() -> int:
     # timestamp. O 'Z' é o mesmo instante e não precisa de escape.
     run_start = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
+    # Os arquivos de teste sobem no bucket: o smoke apaga o que subiu (é
+    # re-executável e não deixa lixo no Storage).
+    bucket = contract.KYC_STORAGE_BUCKET
+    subidos: list[str] = []
     try:
         # ------------------------------------------------------------ 1. auth
         print("1) sem token")
@@ -229,6 +281,16 @@ def main() -> int:
         expect(status == 403, f"outro parceiro não vê o caso (veio {status})")
         status, body, _ = call("GET", f"{kyc}/queue", partner)
         expect(status == 403, f"parceiro não vê a fila (veio {status})")
+
+        # O console da operação confere o PAPEL da conta antes da fila
+        # (é o que abre a tela da fila): a rota `/me` vem do `users.role`.
+        status, body, _ = call("GET", f"{kyc}/me", agent)
+        expect(status == 200 and body.get("is_agent") is True,
+               f"o agente se reconhece como operação (veio {status} {body})")
+        status, body, _ = call("GET", f"{kyc}/me", partner)
+        expect(status == 200 and body.get("is_agent") is False,
+               f"o parceiro NÃO é da operação (veio {status} {body})")
+
         status, body, _ = call("GET", f"{kyc}/queue", agent)
         expect(status == 200, f"agente vê a fila (veio {status})")
         casos = body.get("cases") or []
@@ -261,8 +323,63 @@ def main() -> int:
         expect(isinstance(body.get("position"), int),
                "o caso reenviado tem posição na fila")
 
-        # ----------------------------------------------------- 7. aprovação
-        print("7) aprovação")
+        # ------------------------------- 7. o documento de VERDADE (Storage)
+        #
+        # O app sobe a foto no bucket PRIVADO e manda a referência. O
+        # servidor não confia na referência: confere o dono da pasta e a
+        # EXISTÊNCIA do objeto.
+        print("7) documento de verdade (upload no bucket privado)")
+        stamp = int(time.time() * 1000)
+        prefixo = contract.KYC_STORAGE_PATH_PREFIX
+        path_real = f"{prefixo}/{user_id}/{case_id}/SELFIE_{stamp}.jpg"
+        # Path de outro parceiro: nem existe no bucket, mas é recusado pelo
+        # DONO antes mesmo de chegar na conferência do objeto.
+        path_alheio = f"{prefixo}/22222222-2222-4222-8222-222222222222/{case_id}/OTHER_{stamp}.jpg"
+        # Path do próprio parceiro, mas de um arquivo que não foi subido.
+        path_fantasma = f"{prefixo}/{user_id}/{case_id}/CRLV_{stamp}.jpg"
+
+        status = upload_object(api, bucket, path_real, partner)
+        expect(status in (200, 201),
+               f"o parceiro sobe o objeto no bucket {bucket} (veio {status})")
+        if status in (200, 201):
+            subidos.append(path_real)
+
+        status, body, _ = call("POST", f"{kyc}/cases/{case_id}/documents", partner,
+                               {"doc_type": "SELFIE", "storage_path": path_real,
+                                "quality_flags": {"blur": False}})
+        expect(status == 201,
+               f"POST /documents com storage_path real -> 201 (veio {status} {body})")
+
+        # A resposta não traz as flags: o registro é conferido no banco (pelo
+        # próprio parceiro — a RLS de `kyc_documents` libera o dono do caso).
+        status, body, _ = call(
+            "GET", f"{rest}/kyc_documents?case_id=eq.{case_id}&doc_type=eq.SELFIE"
+                   f"&select=storage_path,quality_flags", partner)
+        expect(status == 200, f"leitura dos documentos do caso (veio {status} {body})")
+        docs = [d for d in body if d.get("storage_path") == path_real]
+        expect(len(docs) == 1,
+               f"o documento foi gravado com o path enviado (veio {body})")
+        flags = docs[0].get("quality_flags") or {}
+        expect(flags.get("upload_pending") is False,
+               f"com o arquivo no bucket, upload_pending é False (veio {flags})")
+        expect(flags.get("blur") is False,
+               f"a flag de qualidade do app foi preservada (veio {flags})")
+
+        # Negativo 1: path de OUTRO uid -> 422 storage_path_not_owned.
+        status, body, _ = call("POST", f"{kyc}/cases/{case_id}/documents", partner,
+                               {"doc_type": "OTHER", "storage_path": path_alheio})
+        expect(status == 422 and body.get("code") == "storage_path_not_owned",
+               f"path de outro uid é recusado (veio {status} {body})")
+
+        # Negativo 2: path do próprio uid, objeto inexistente -> 422
+        # document_not_found.
+        status, body, _ = call("POST", f"{kyc}/cases/{case_id}/documents", partner,
+                               {"doc_type": "CRLV", "storage_path": path_fantasma})
+        expect(status == 422 and body.get("code") == "document_not_found",
+               f"path de objeto inexistente é recusado (veio {status} {body})")
+
+        # ----------------------------------------------------- 8. aprovação
+        print("8) aprovação")
         status, body, _ = call("POST", f"{kyc}/cases/{case_id}/review", agent,
                                {"decision": "APPROVED", "note": "ok"})
         expect(status == 200 and body.get("status") == "APPROVED",
@@ -275,8 +392,8 @@ def main() -> int:
         expect((body.get("partner") or {}).get("kyc_status") == "APPROVED",
                "o gate do app abre: o parceiro aprovado pode ficar online")
 
-        # -------------------------------------------------------- 8. rastro
-        print("8) rastro (auditoria, notificação, evento)")
+        # -------------------------------------------------------- 9. rastro
+        print("9) rastro (auditoria, notificação, evento)")
         # O filtro é por instante: sem ele, o rastro da execução ANTERIOR
         # faria a asserção passar mesmo sem notificação nesta.
         status, body, _ = call(
@@ -305,10 +422,13 @@ def main() -> int:
         print(f"FALHOU: {exc}", file=sys.stderr)
         return 1
     finally:
+        for path in subidos:
+            delete_object(api, bucket, path, partner)
         reset_partner(api, svc, user_id)
         print("caso de teste removido")
 
-    print("PASS — KYC no Postgres: fila, SLA, recusa, reenvio e aprovação")
+    print("PASS — KYC no Postgres: fila, SLA, documento real no bucket privado, "
+          "recusa, reenvio e aprovação")
     return 0
 
 

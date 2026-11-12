@@ -20,6 +20,7 @@
 //   POST /cases                              (abre/retoma o caso; Idempotency-Key)
 //   GET  /cases/{caseId}                     (o caso do chamador)
 //   POST /cases/{caseId}/documents           (reenvio da documentação)
+//   GET  /me                                 (quem está logado e seu papel)
 //   GET  /queue                              (fila da operação — só agente)
 //   POST /cases/{caseId}/review              (decisão — só agente)
 
@@ -74,6 +75,23 @@ function mapError(code: string, detail: string) {
   }
   if (msg.includes("invalid_decision")) {
     return problem(422, "invalid_request", "Decisão inválida");
+  }
+  // O documento é um arquivo de verdade: o servidor confere se o path é da
+  // pasta do próprio parceiro e se o objeto existe no bucket privado
+  // (`kyc-docs`). Path de outro dono ou path que não aponta para arquivo
+  // nenhum são erro de ENTRADA (422); Storage fora do ar é erro do SERVIDOR
+  // (503) — o parceiro pode tentar de novo.
+  if (msg.includes("storage_path_not_owned")) {
+    return problem(422, "storage_path_not_owned",
+      "Este documento não é da sua pasta de arquivos");
+  }
+  if (msg.includes("document_not_found")) {
+    return problem(422, "document_not_found",
+      "O arquivo enviado não existe no bucket");
+  }
+  if (msg.includes("storage_unavailable")) {
+    return problem(503, "storage_unavailable",
+      "O armazenamento está indisponível no momento");
   }
   return problem(500, "internal", "Falha ao processar a operação");
 }
@@ -216,6 +234,15 @@ Deno.serve(async (req) => {
       await idempotencyStore(caller, idemKey, "POST /kyc/cases", fingerprint, 201, r.data);
     }
     return json(201, r.data);
+  }
+
+  // ---- quem está logado (o console confere o papel ANTES da fila) ---------
+  //
+  // O console recusa a conta que não é da operação na TELA; esta rota é a
+  // fonte da verdade do papel (vem do `users.role`, que só o banco escreve).
+  if (req.method === "GET" && path === "/me") {
+    const r = await rpc(caller, "api_kyc_me", {});
+    return r.ok ? json(200, r.data) : r.response;
   }
 
   // ---- fila da operação (só agente) ---------------------------------------
