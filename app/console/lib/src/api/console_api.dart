@@ -139,7 +139,13 @@ class KycDocument {
   /// objeto, e o console não inventa URL.
   final String? storagePath;
 
-  /// O objeto EXISTE no bucket? O servidor confere antes de responder.
+  /// O objeto EXISTE no bucket?
+  ///
+  /// O servidor pergunta ao BUCKET (`fn_kyc_storage_object_present`), não ao
+  /// nome do caminho: um `storage_path` que não aponta para objeto nenhum
+  /// é "sem arquivo". Sem esta distinção a tela pintava **ARQUIVO OK**
+  /// (verde) e o preview falhava logo abaixo — duas afirmações contrárias
+  /// na mesma tela.
   final bool hasFile;
 
   /// Dá para abrir o documento? Só se há arquivo de verdade.

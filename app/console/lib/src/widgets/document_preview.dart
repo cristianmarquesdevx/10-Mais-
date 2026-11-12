@@ -50,16 +50,41 @@ class _DocumentPreviewState extends State<DocumentPreview> {
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant DocumentPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // O caminho mudou (outro documento): os bytes antigos NÃO são deste
+    // arquivo. Sem isto, a tela mostraria a CNH com o rótulo da CRLV.
+    if (oldWidget.path != widget.path) {
+      _bytes = null;
+      _failed = false;
+      _loading = true;
+      _load();
+    }
+  }
+
   Future<void> _load() async {
+    final path = widget.path;
     setState(() {
       _loading = true;
       _failed = false;
     });
-    final bytes = await widget.api.documentBytes(widget.path);
+    final bytes = await widget.api.documentBytes(path);
     if (!mounted) return;
+    // O widget pode ter sido trocado (outro path) enquanto o download
+    // corria: a resposta velha não pode virar a imagem da tela.
+    if (path != widget.path) return;
+    if (bytes == null || !looksLikeImage(bytes)) {
+      setState(() {
+        _bytes = null;
+        _failed = true;
+        _loading = false;
+      });
+      return;
+    }
     setState(() {
-      _bytes = bytes != null && looksLikeImage(bytes) ? bytes : null;
-      _failed = bytes == null || !looksLikeImage(bytes);
+      _bytes = bytes;
+      _failed = false;
       _loading = false;
     });
   }
@@ -87,7 +112,10 @@ class _DocumentPreviewState extends State<DocumentPreview> {
         borderRadius: BorderRadius.circular(AppSpace.radiusCard),
         child: Container(
           width: double.infinity,
-          height: 200,
+          // A caixa tem ALTURA MÍNIMA, não fixa: o estado de falha precisa
+          // de mais espaço com a fonte do sistema grande (a 2.0 o aviso
+          // estourava os 200 px e o layout quebrava).
+          constraints: const BoxConstraints(minHeight: 200),
           decoration: BoxDecoration(
             color: t.background,
             borderRadius: BorderRadius.circular(AppSpace.radiusCard),
@@ -95,33 +123,67 @@ class _DocumentPreviewState extends State<DocumentPreview> {
           ),
           clipBehavior: Clip.antiAlias,
           child: _loading
-              ? _Loading(t: t)
+              ? SizedBox(height: 200, child: _Loading(t: t))
               : _failed
                   ? _Failed(t: t, onRetry: _load)
-                  : Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Image.memory(
-                          bytes!,
-                          fit: BoxFit.cover,
-                          // Um JPEG que o aparelho não decodifica não pode
-                          // virar tela branca: mostra o aviso.
-                          errorBuilder: (_, __, ___) => _Failed(
-                            t: t,
-                            onRetry: _load,
-                            message: 'Este arquivo não pôde ser aberto.',
+                  : SizedBox(
+                      height: 200,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          Image.memory(
+                            bytes!,
+                            fit: BoxFit.cover,
+                            // Um JPEG que o aparelho não decodifica não pode
+                            // virar tela branca: mostra o aviso.
+                            errorBuilder: (_, __, ___) => const _DecodeFailed(),
                           ),
-                        ),
-                        const Positioned(
-                          left: AppSpace.s,
-                          bottom: AppSpace.s,
-                          child: _Tag(
-                            icon: Icons.zoom_out_map,
-                            label: 'Toque para ampliar',
+                          const Positioned(
+                            left: AppSpace.s,
+                            bottom: AppSpace.s,
+                            child: _Tag(
+                              icon: Icons.zoom_out_map,
+                              label: 'Toque para ampliar',
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
+        ),
+      ),
+    );
+  }
+}
+
+/// O arquivo É imagem, mas o aparelho não conseguiu decodificar.
+///
+/// Este aviso fica DENTRO da caixa de 200 px (é o `errorBuilder` da
+/// imagem): por isso ele é compacto e o texto corta — o botão de tentar de
+/// novo está no estado de falha do preview, logo abaixo.
+class _DecodeFailed extends StatelessWidget {
+  const _DecodeFailed();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpace.l),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.broken_image_outlined, size: 28, color: t.danger),
+            const SizedBox(height: AppSpace.xs),
+            Flexible(
+              child: Text(
+                'Este arquivo não pôde ser aberto.',
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: AppType.label.copyWith(color: t.danger),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -195,23 +257,23 @@ class _Loading extends StatelessWidget {
 }
 
 class _Failed extends StatelessWidget {
-  const _Failed({required this.t, required this.onRetry, this.message});
+  const _Failed({required this.t, required this.onRetry});
 
   final ColorSchemeColorTokens t;
   final VoidCallback onRetry;
-  final String? message;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(AppSpace.l),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.broken_image_outlined, size: 32, color: t.danger),
           const SizedBox(height: AppSpace.s),
           Text(
-            message ?? 'Não foi possível carregar o documento.',
+            'Não foi possível carregar o documento.',
             textAlign: TextAlign.center,
             style: AppType.label.copyWith(color: t.danger),
           ),

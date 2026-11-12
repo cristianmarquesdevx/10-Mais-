@@ -249,16 +249,32 @@ Fase 3). Ele é um app Flutter mobile (Android/iOS), não uma página web.
   cadastro nem como falar com a pessoa. Os estados vazio (com ação de
   atualizar), de erro e de recusa de permissão são telas explícitas — nunca
   uma fila inventada. A fila **se atualiza sozinha** (polling de 30 s): uma
-  fila parada, com a pessoa operando um caso, é uma fila mentirosa.
+  fila parada, com a pessoa operando um caso, é uma fila mentirosa. Duas
+  leituras que se cruzam não podem se atropelar: a resposta mais antiga é
+  descartada (a fila mostra o retrato mais novo, não o mais velho).
+  O servidor ordena a fila por `(sla_due_at, created_at, id)` **antes** do
+  `LIMIT`: com `LIMIT` sem `ORDER BY`, o Postgres devolvia 50 casos
+  arbitrários e o caso que vence primeiro podia não aparecer — esconder
+  trabalho numa fila de atendimento.
 - **Detalhe** (`GET /kyc/cases/{caseId}`): a **identidade** do parceiro (nome,
   telefone e conta), a documentação com a marca de **arquivo pendente**
   (documento registrado sem arquivo) e a decisão (aprovar, recusar ou pedir
   reenvio) com a folha de motivo padronizado.
 - **O documento é VISTO**: o detalhe devolve o `storage_path` dos documentos
-  e a marca `has_file` (o objeto existe no bucket). O console baixa o objeto
-  do bucket privado **com o próprio token da operação** e mostra a imagem
-  (miniatura no detalhe, tela cheia com zoom ao toque). A operação não
-  aprova uma CNH que nunca viu.
+  e a marca `has_file`. O console baixa o objeto do bucket privado **com o
+  próprio token da operação** e mostra a imagem (miniatura no detalhe, tela
+  cheia com zoom ao toque). A operação não aprova uma CNH que nunca viu.
+- **`has_file` é HONESTO**: o campo pergunta ao **bucket** se o objeto
+  existe (`fn_kyc_storage_object_present`), e não "o caminho não é o
+  marcador `PENDENTE/`". Um `storage_path` que não aponta para objeto
+  nenhum é `has_file: false` — e a tela mostra **SEM ARQUIVO**. A versão
+  anterior calculava pelo nome do caminho: pintava **ARQUIVO OK** (verde) e
+  o preview falhava logo abaixo, duas afirmações contrárias na mesma tela
+  (`supabase/migrations/20261110000900_kyc_console_docs_fix.sql`).
+- **Campos nulos são OMITIDOS**: o detalhe é montado com
+  `jsonb_strip_nulls`, então um campo nulo (`rejection_code`, `sla`,
+  `partner_name`) **não vem** — não vem como `null`. O cliente trata
+  "ausente" e "nulo" igual (`docs/fase2/openapi.yaml`, `KycCase`).
 - **Decisão** (`POST /kyc/cases/{caseId}/review`): as mesmas regras do
   servidor — recusa e reenvio exigem `rejection_code` (422
   `rejection_code_required`), e a decisão muda o mundo (§6.3).

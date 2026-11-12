@@ -289,6 +289,13 @@ class ContratoTest(unittest.TestCase):
     KYC_CONSOLE_DOCS_MIGRATION = (
         "supabase/migrations/20261110000800_kyc_console_docs.sql")
 
+    #: A migration que conserta os DOIS defeitos da 00800: o `has_file`
+    #: mentindo (virava "ARQUIVO OK" para um path que não aponta para
+    #: objeto nenhum) e a fila sem `ORDER BY` antes do `LIMIT` (o caso mais
+    #: urgente podia ficar de fora).
+    KYC_CONSOLE_FIX_MIGRATION = (
+        "supabase/migrations/20261110000900_kyc_console_docs_fix.sql")
+
     def test_console_usa_o_bucket_do_contrato(self):
         # O console lê o documento do MESMO bucket que o app do parceiro
         # escreve: um nome divergente faria a tela mostrar "sem arquivo"
@@ -327,6 +334,38 @@ class ContratoTest(unittest.TestCase):
             self.assertIn(campo, mig,
                           f"a API do KYC não devolve {campo}")
 
+    def test_has_file_pergunta_ao_bucket_e_nao_ao_nome_do_caminho(self):
+        # O `has_file` precisa ser a RESPOSTA DO BUCKET, não "o caminho não
+        # é o marcador PENDENTE": a 00800 mentia, pintava "ARQUIVO OK"
+        # (verde) e o preview falhava logo abaixo — duas afirmações
+        # contrárias na mesma tela.
+        mig = read(self.KYC_CONSOLE_FIX_MIGRATION)
+        self.assertIn("fn_kyc_storage_object_present", mig,
+                      "o has_file não consulta o bucket")
+        self.assertIn("storage.objects", mig,
+                      "o has_file não consulta a tabela de objetos")
+        # E a função que ele usa tem que existir.
+        self.assertIn("CREATE OR REPLACE FUNCTION fn_kyc_storage_object_present",
+                      mig)
+
+    def test_fila_ordena_antes_do_limite(self):
+        # A fila tinha `LIMIT` sem `ORDER BY`: o Postgres devolvia 50
+        # linhas arbitrárias e o caso que vence primeiro podia não estar
+        # na tela — esconder trabalho numa fila de atendimento.
+        mig = read(self.KYC_CONSOLE_FIX_MIGRATION)
+        fila = mig[mig.index("CREATE OR REPLACE FUNCTION api_kyc_queue"):]
+        order = fila.index("ORDER BY c.sla_due_at, c.created_at, c.id")
+        limite = fila.index("LIMIT")
+        self.assertLess(order, limite,
+                        "o ORDER BY da fila precisa vir ANTES do LIMIT")
+
+    def test_console_nao_marca_arquivo_ok_sem_objeto(self):
+        # A tela decide pelo `has_file`: sem ele, ela não pode pintar
+        # "ARQUIVO OK". E o documento só é ABERTÁVEL com arquivo de verdade.
+        console = read("app/console/lib/src/api/console_api.dart")
+        self.assertIn("isViewable", console)
+        self.assertIn("hasFile &&", console)
+
     def test_console_tem_permissao_de_internet(self):
         # A permissão de rede tem que estar no manifest MAIN: no `debug`
         # ela é herdada, mas o APK de RELEASE sairia sem rede (e a fila
@@ -345,6 +384,17 @@ class ContratoTest(unittest.TestCase):
         self.assertIn("partner_name", ci)
         self.assertIn("storage_path", ci)
 
+    def test_ci_prova_o_has_file_honesto(self):
+        # O CI precisa provar os DOIS lados do `has_file`: o path com
+        # objeto é "COM arquivo" e o path SEM objeto é "sem arquivo". Um
+        # assert que só prova o lado feliz deixa a mentira passar.
+        ci = read("scripts/ci_migrations.sh")
+        self.assertIn("INSERT INTO storage.objects", ci,
+                      "o CI não cria o objeto no bucket — o has_file "
+                      "honesto não é provado")
+        self.assertIn("IS DISTINCT FROM false", ci,
+                      "o CI não exige has_file=false para o path sem objeto")
+
     def test_seed_do_console_deixa_caso_na_fila(self):
         # A prova VISUAL do console precisa de um caso de verdade na fila:
         # o smoke apaga o caso dele, e o seed é quem deixa um.
@@ -360,6 +410,16 @@ class ContratoTest(unittest.TestCase):
                       "has_file:"):
             self.assertIn(campo, api,
                           f"o openapi não documenta {campo}")
+
+    def test_openapi_diz_que_o_campo_nulo_e_omitido(self):
+        # A API usa `jsonb_strip_nulls`: um campo NULO não vem como
+        # `null`, ele **some**. O openapi precisa dizer isso — senão um
+        # cliente novo acha que o campo sempre vem.
+        api = read("docs/fase2/openapi.yaml")
+        self.assertIn("jsonb_strip_nulls", api,
+                      "o openapi não avisa que o campo nulo é OMITIDO")
+        self.assertIn("OMITTED when null", api,
+                      "o openapi não marca os campos nulos como omitidos")
 
 
 if __name__ == "__main__":

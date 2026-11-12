@@ -60,6 +60,11 @@ app/*/ios/Pods/
 *.ipa
 app/*/web/.dart_tool/
 
+# Build gerado na RAIZ do repositório: o Flutter/CMake do desktop (Windows)
+# deixa `CMakeCache.txt` e `CMakeFiles/` aqui quando uma ferramenta roda
+# sobre a raiz. É artefato de execução — nunca entra no histórico.
+/build/
+
 # ---------------------------------------------------------------------------
 # Python — scripts de demo, smokes, E2E e simuladores.
 # ---------------------------------------------------------------------------

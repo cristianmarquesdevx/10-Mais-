@@ -294,7 +294,16 @@ class _CaseScreenState extends State<CaseScreen> {
           GradientButton(
             key: const ValueKey('approve'),
             onPressed: _deciding ? null : _approve,
-            child: const Text('APROVAR CADASTRO'),
+            // O ícone volta: o CTA primário é a ação mais importante da
+            // tela e precisa dizer, no olhar, o que ela faz.
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.check_circle_outline, size: 20),
+                SizedBox(width: AppSpace.s),
+                Text('APROVAR CADASTRO'),
+              ],
+            ),
           ),
           const SizedBox(height: AppSpace.s),
           OutlinedButton.icon(

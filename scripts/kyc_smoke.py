@@ -425,6 +425,19 @@ def main() -> int:
         expect(doc_real.get("upload_pending") is False,
                "o documento com arquivo não está pendente")
 
+        # O `has_file` HONESTO: um documento registrado SEM objeto (o
+        # marcador legado `PENDENTE/`) NÃO pode vir como "COM arquivo" — a
+        # tela pintava "ARQUIVO OK" (verde) e o preview falhava logo abaixo,
+        # duas afirmações contrárias na mesma tela. O servidor pergunta ao
+        # BUCKET, não ao nome do caminho.
+        sem_objeto = [d for d in docs_detalhe
+                      if d.get("storage_path") != path_real]
+        expect(sem_objeto, "o caso tem um documento sem objeto (o marcador)")
+        for d in sem_objeto:
+            expect(d.get("has_file") is False,
+                   f"um documento sem objeto NÃO pode vir como COM arquivo "
+                   f"(veio {d})")
+
         # O arquivo BAIXA: a operação lê o objeto do bucket privado com o
         # PRÓPRIO token (a RLS autoriza; não há service role no caminho).
         status = download_object(api, bucket, path_real, agent)

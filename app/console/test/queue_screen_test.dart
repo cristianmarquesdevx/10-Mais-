@@ -288,6 +288,73 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('documento sem objeto no bucket é "SEM ARQUIVO"', (tester) async {
+      await telaAlta(tester);
+      // O servidor diz que o caminho NÃO aponta para objeto nenhum
+      // (`has_file: false`, mas não é o registro "pendente"): a tela não
+      // pode pintar "ARQUIVO OK" nem tentar abrir um documento que não
+      // existe — as duas afirmações contrárias na mesma tela.
+      final json = jsonEncode({
+        'case_id': '11111111-1111-4111-8111-111111111111',
+        'status': 'IN_REVIEW',
+        'documents': [
+          {
+            'doc_type': 'CNH',
+            'created_at': DateTime.now().toUtc().toIso8601String(),
+            'upload_pending': false,
+            'has_file': false,
+            'storage_path':
+                'kyc/77777777-7777-4777-8777-777777777777/c-1/CNH_1.jpg',
+          },
+        ],
+      });
+      final api = ConsoleApi(
+        baseUrl: 'http://host/functions/v1/kyc',
+        accessToken: () async => 'jwt',
+        inner: MockClient((_) async => http.Response(json, 200)),
+      );
+
+      await tester.pumpWidget(
+        monta(
+          CaseScreen(caseId: 'c-1', api: api, controller: ConsoleController(api)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('SEM ARQUIVO'), findsOneWidget);
+      expect(find.text('ARQUIVO OK'), findsNothing);
+      // E não há preview: não existe arquivo para abrir.
+      expect(find.byKey(const ValueKey('document-preview')), findsNothing);
+    });
+
+    testWidgets('o CTA de aprovar diz o que faz (ícone + rótulo)',
+        (tester) async {
+      await telaAlta(tester);
+      final api = ConsoleApi(
+        baseUrl: 'http://host/functions/v1/kyc',
+        accessToken: () async => 'jwt',
+        inner: MockClient((_) async => http.Response(casoJson(), 200)),
+      );
+
+      await tester.pumpWidget(
+        monta(
+          CaseScreen(caseId: 'c-1', api: api, controller: ConsoleController(api)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final cta = find.byKey(const ValueKey('approve'));
+      expect(cta, findsOneWidget);
+      expect(
+        find.descendant(of: cta, matching: find.byIcon(Icons.check_circle_outline)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: cta, matching: find.text('APROVAR CADASTRO')),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('aprovar pede confirmação e envia APPROVED', (tester) async {
     await telaAlta(tester);
       final enviados = <Map<String, dynamic>>[];

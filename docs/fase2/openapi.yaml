@@ -1205,28 +1205,32 @@ components:
       additionalProperties: true
     KycCase:
       type: object
-      description: The partner's KYC case (SPECS §6)
+      description: >
+        The partner's KYC case (SPECS §6). The response is built with
+        `jsonb_strip_nulls`: a nullable field that is NULL is OMITTED from
+        the JSON (not sent as `null`) — a client must treat "absent" and
+        "null" the same way (the console does).
       required: [case_id, status]
       properties:
         case_id: { type: string, format: uuid }
         status: { type: string, enum: [AUTO_APPROVED, APPROVED, IN_REVIEW, REJECTED, RESUBMIT] }
-        position: { type: integer, nullable: true, description: 'rank in the review queue (1 = next)' }
+        position: { type: integer, nullable: true, description: 'rank in the review queue (1 = next); OMITTED when the case is not in the queue' }
         sla:
           type: string
           format: date-time
           nullable: true
-          description: deadline of the manual review (inside the human window — SPECS §6.2)
-        rejection_code: { type: string, nullable: true }
-        decided_at: { type: string, format: date-time, nullable: true }
-        partner_user_id: { type: string, format: uuid, nullable: true }
+          description: deadline of the manual review (inside the human window — SPECS §6.2); OMITTED when null
+        rejection_code: { type: string, nullable: true, description: 'OMITTED when null (the case was never rejected)' }
+        decided_at: { type: string, format: date-time, nullable: true, description: 'OMITTED when null (not decided yet)' }
+        partner_user_id: { type: string, format: uuid, nullable: true, description: 'OMITTED when null' }
         partner_name:
           type: string
           nullable: true
-          description: "the partner's name (profiles.full_name) — the operation must know WHOSE registration it is judging"
+          description: "the partner's name (profiles.full_name) — the operation must know WHOSE registration it is judging; OMITTED when the profile has no name"
         partner_phone:
           type: string
           nullable: true
-          description: "the partner's phone (users.phone_e164) — so the operation can reach them"
+          description: "the partner's phone (users.phone_e164) — so the operation can reach them; OMITTED when null"
         documents:
           type: array
           items:
@@ -1238,19 +1242,22 @@ components:
               storage_path:
                 type: string
                 nullable: true
-                description: "object name inside the PRIVATE bucket (kyc-docs); the client downloads it with its OWN token (Storage RLS)"
+                description: "object name inside the PRIVATE bucket (kyc-docs); the client downloads it with its OWN token (Storage RLS). OMITTED when the document has no object (the legacy PENDENTE marker)"
               has_file:
                 type: boolean
-                description: 'the object really exists in the bucket (false for the legacy PENDENT marker)'
+                description: 'the object really EXISTS in the bucket — the server asks the bucket itself (fn_kyc_storage_object_present), so a path pointing to nothing is false and the client never shows "ARQUIVO OK" for a missing file'
     KycQueueItem:
       type: object
-      description: One case waiting for the operation's review
+      description: >
+        One case waiting for the operation's review. The list is ordered by
+        the ranking key (sla_due_at, created_at, id) BEFORE the limit, so the
+        most urgent case is never dropped from the queue.
       required: [case_id, status]
       properties:
         case_id: { type: string, format: uuid }
         partner_user_id: { type: string, format: uuid }
-        partner_name: { type: string, nullable: true, description: "the partner's name (profiles.full_name)" }
-        partner_phone: { type: string, nullable: true, description: "the partner's phone (users.phone_e164)" }
+        partner_name: { type: string, nullable: true, description: "the partner's name (profiles.full_name); null when the profile has no name" }
+        partner_phone: { type: string, nullable: true, description: "the partner's phone (users.phone_e164); null when the account has no phone" }
         status: { type: string, enum: [IN_REVIEW, RESUBMIT] }
         sla_due_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }

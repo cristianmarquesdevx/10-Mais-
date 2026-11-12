@@ -362,6 +362,45 @@ dev / +5596990000004"** → detalhe com o **documento na tela** → tela cheia
 com zoom → folha de decisão → aprovação (o caso saiu da fila e o
 `partners.kyc_status` foi para `APPROVED` no banco).
 
+### 8i. Rodada "os defeitos que o juiz achou" (12/11/2026)
+
+A verificação adversarial (`fable-judge` + `engineering-code-reviewer`) do
+commit `530736c` deu **VERIFIED WITH CAVEATS** e achou **dois defeitos
+reais** no que eu tinha affirmationado. Corrigidos aqui.
+
+| Defeito | O que era | O que é agora |
+|---|---|---|
+| **`has_file` MENTIA** (F2-a) | A 00800 calculava "o objeto existe" como *"o caminho não é o marcador `PENDENTE/`"*. Um `storage_path` que não aponta para objeto nenhum vinha como **ARQUIVO OK** (verde) e o preview falhava logo abaixo — duas afirmações contrárias na mesma tela | A 00900 cria `fn_kyc_storage_object_present` e o `has_file` pergunta **ao bucket**. Provado dos dois lados: objeto real → `true`; path sem objeto → `false` (a tela mostra **SEM ARQUIVO**) |
+| **A FILA PODIA OMITIR o caso mais urgente** (pré-existente) | O `LIMIT` estava **sem `ORDER BY`**: o Postgres devolvia 50 linhas arbitrárias e só depois ordenava. Com mais de 50 casos, o caso que vence primeiro podia não estar na tela — esconder trabalho numa fila de atendimento | O `ORDER BY (sla_due_at, created_at, id)` vai **dentro** do subquery, **antes** do `LIMIT`, na mesma chave do ranking (`fn_kyc_queue_position`) |
+| **`jsonb_strip_nulls` omitia nulos** (F2-b) | O `openapi.yaml` dizia `nullable: true`, o que faz o leitor esperar a chave presente com `null` — mas o servidor **omite** a chave | O `openapi.yaml` documenta: *"a response é montada com `jsonb_strip_nulls`: um campo NULO é OMITIDO"*; o console trata "ausente" e "nulo" igual |
+| **Preview sem `didUpdateWidget`** | Trocar de documento mantinha os bytes antigos: a tela podia mostrar a **CNH com o rótulo da CRLV** | `didUpdateWidget` recarrega quando o caminho muda, e a resposta antiga (de outro path) é descartada |
+| **Corrida no controller** | Polling (30 s) + "puxar para baixo" + decisão podiam cruzar: a resposta **mais antiga** chegava depois e sobrescrevia a fila com um retrato velho | Cada leitura recebe um número; **só a última escreve o estado** |
+| **Ícone perdido no CTA** | O botão "APROVAR CADASTRO" ficou só com texto (a troca de `FilledButton` por `GradientButton` perdeu o ícone) | O ícone `check_circle_outline` voltou (o CTA primário diz, no olhar, o que faz) |
+| **Preview estourava em 360×800 com fonte 2.0** | A caixa de altura fixa (200 px) não cabia o aviso de falha com a fonte grande — overflow de 90 px | A caixa tem **altura mínima** (não fixa) e o aviso de falha cabe; o `errorBuilder` da imagem tem um aviso compacto próprio |
+
+| Artefato | Conteúdo |
+|---|---|
+| `supabase/migrations/20261110000900_kyc_console_docs_fix.sql` | `fn_kyc_storage_object_present` (pergunta ao bucket, degrada para `false` sem o schema `storage`), `api_kyc_case_get` com o `has_file` honesto e `api_kyc_queue` com o `ORDER BY` antes do `LIMIT` |
+| `app/console/lib/src/state/console_controller.dart` | Guarda de concorrência: a leitura mais antiga é descartada |
+| `app/console/lib/src/widgets/document_preview.dart` | `didUpdateWidget`, altura variável e aviso compacto de decodificação |
+| `app/console/lib/src/screens/case_screen.dart` | Ícone do CTA de aprovação |
+| `app/console/test/` | **45/45** (33 + controller (4) + preview (6) + "SEM ARQUIVO" + ícone do CTA) |
+| `scripts/ci_migrations.sh` | Assert do `has_file` **dos dois lados**: o path com objeto é "COM arquivo" e o path sem objeto é `false` (um assert só do lado feliz deixaria a mentira passar) |
+| `scripts/kyc_smoke.py` | Prova o `has_file` honesto contra o stack real (documento com objeto → `true`; marcador `PENDENTE/` → `false`) |
+| `scripts/test_contract.py` | **34/34** (29 + `has_file` pergunta ao bucket + `ORDER BY` antes do `LIMIT` + CI prova os dois lados + openapi diz que o nulo é omitido) |
+
+Verificação desta rodada: `dart analyze` limpo (console + `ten_design`);
+console **45/45**; passageiro **90/90**; parceiro **139/139**; `ten_auth`
+**18/18**; `test_contract.py` **34/34**; `ci_migrations.sh` aplica **25
+migrations do zero** → "TODOS OS ASSERTS OK"; `kyc_smoke.py` PASS com o
+`has_file` honesto provado dos dois lados; **APKs debug e release buildam**
+(release inspecionado: `uses-permission: name='android.permission.INTERNET'`);
+**prova no emulador** (AVD API 37) refeita com o build novo: fila → detalhe
+com **o documento na tela** → **"SEM ARQUIVO"** em vermelho no documento cujo
+path não aponta para objeto nenhum (o `has_file` honesto, visto pela
+operação) → folha de decisão → aprovação (a fila esvaziou e o
+`partners.kyc_status` = `APPROVED` no banco).
+
 
 Bloqueio de ambiente (não de produto): `flutter pub get` no app parceiro
 falha neste host com "Building with plugins requires symlink support" — o

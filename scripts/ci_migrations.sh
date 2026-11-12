@@ -396,10 +396,14 @@ BEGIN
     RAISE EXCEPTION 'a fila do KYC não traz o telefone do parceiro: %', v_caso;
   END IF;
 
-  -- O DETALHE traz o caminho do arquivo e diz que ele EXISTE.
+  -- O DETALHE traz o caminho do arquivo e diz se ele EXISTE.
   v_path := 'kyc/' || v_parceiro::text || '/' || v_case::text || '/CNH_1.jpg';
   INSERT INTO kyc_documents (case_id, doc_type, storage_path)
   VALUES (v_case, 'CNH', v_path);
+  -- O objeto existe no bucket (o stub do Storage): só assim o `has_file`
+  -- pode ser VERDADEIRO.
+  INSERT INTO storage.objects (bucket_id, name, owner)
+  VALUES ('kyc-docs', v_path, v_parceiro);
 
   v_detalhe := api_kyc_case_get(v_case);
   IF v_detalhe->>'partner_name' IS NULL THEN
@@ -411,6 +415,19 @@ BEGIN
   END IF;
   IF (v_doc->>'has_file')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'o detalhe do KYC não marca o documento como COM arquivo: %', v_doc;
+  END IF;
+
+  -- E um path que NÃO aponta para objeto nenhum NÃO pode ser "ARQUIVO OK":
+  -- a tela pintava verde enquanto o preview falhava ("Não foi possível
+  -- carregar o documento"). O `has_file` pergunta ao BUCKET.
+  INSERT INTO kyc_documents (case_id, doc_type, storage_path)
+  VALUES (v_case, 'OTHER',
+          'kyc/' || v_parceiro::text || '/' || v_case::text || '/nao-existe.jpg');
+  SELECT d INTO v_doc
+    FROM jsonb_array_elements(api_kyc_case_get(v_case)->'documents') d
+   WHERE d->>'doc_type' = 'OTHER';
+  IF (v_doc->>'has_file')::boolean IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'um path sem objeto foi marcado como COM arquivo: %', v_doc;
   END IF;
 END
 $test$;
