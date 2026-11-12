@@ -5,6 +5,8 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'kyc_storage.dart';
+
 /// Contrato tipado do app parceiro — espelho de docs/fase2/openapi.yaml.
 /// Toda mutação envia `Idempotency-Key` (UUID) e todo erro vira [ApiProblem]
 /// (problem+json com `code` estável — as telas decidem por `code`, nunca por
@@ -701,12 +703,20 @@ typedef IdempotencyKey = String Function();
 /// perto de vencer — a chamada precisa esperar por isso).
 typedef TokenProvider = FutureOr<String> Function();
 
+/// O id da conta logada (`sub` do token).
+///
+/// É o DONO da pasta no Storage: o arquivo do KYC só sobe no caminho do
+/// próprio parceiro, e o servidor recusa qualquer outro caminho.
+typedef UserIdProvider = FutureOr<String?> Function();
+
 class ApiClient {
   ApiClient({
     required this.baseUrl,
     required this.accessToken,
     this.ridesBase,
     this.kycBase,
+    this.storageBase,
+    this.userId,
     http.Client? inner,
     IdempotencyKey? newIdemKey,
   })  : _http = inner ?? http.Client(),
@@ -738,6 +748,20 @@ class ApiClient {
   /// aprova na hora) — o app não quebra, mas não há fila de verdade.
   final String? kycBase;
 
+  /// Raiz do projeto Supabase (ex.: `http://10.0.2.2:54321`), de onde sai a
+  /// URL do Storage (`<raiz>/storage/v1/object/<bucket>/<path>`).
+  ///
+  /// Vazio = sem upload real: o documento é registrado como PENDENTE (o
+  /// registro honesto) e a tela avisa que o arquivo não subiu.
+  final String? storageBase;
+
+  /// O id da conta logada — de onde sai o DONO da pasta no Storage.
+  ///
+  /// É o app que passa o `sub` da sessão: o caminho do arquivo tem que ser o
+  /// do próprio parceiro, porque é o servidor que confere isso (e a RLS
+  /// confira de novo, no bucket). Nulo = sem sessão: o upload não acontece.
+  final UserIdProvider? userId;
+
   /// O ciclo de corrida já fala com o Postgres de verdade?
   bool get usesRidesBackend => ridesBase != null && ridesBase!.isNotEmpty;
 
@@ -751,6 +775,12 @@ class ApiClient {
 
   String get _kycRoot {
     final b = kycBase ?? '';
+    return b.endsWith('/') ? b.substring(0, b.length - 1) : b;
+  }
+
+  /// A raiz do projeto (o Storage mora nela).
+  String get _storageRoot {
+    final b = storageBase ?? '';
     return b.endsWith('/') ? b.substring(0, b.length - 1) : b;
   }
 
@@ -1058,6 +1088,87 @@ class ApiClient {
       idempotent: true,
       kyc: true,
       body: docType == null ? null : {'doc_type': docType},
+    );
+    return j.containsKey('case_id') ? KycCase.fromJson(j) : null;
+  }
+
+  /// Sobe o ARQUIVO do documento no bucket privado do KYC (F9) e devolve o
+  /// path (o que o servidor valida).
+  ///
+  /// O bucket é privado: quem sobe é o dono da pasta — a RLS do
+  /// `storage.objects` recusa o resto. O servidor confere, no registro do
+  /// documento, que o path é do próprio parceiro E que o objeto existe
+  /// (é por isso que o upload vem ANTES do registro).
+  ///
+  /// Sem [storageBase] configurado, não há upload: a chamada falha com
+  /// `storage_not_configured` e a tela mantém o registro honesto
+  /// (documento PENDENTE).
+  ///
+  /// O dono da pasta vem de [userId] (o `sub` da sessão): o caminho é
+  /// SEMPRE o do parceiro logado — o app não escolhe a pasta.
+  Future<String> uploadKycDocument({
+    required String docType,
+    required List<int> bytes,
+    String contentType = 'image/jpeg',
+  }) async {
+    final root = _storageRoot;
+    if (root.isEmpty) {
+      throw ApiProblem(0, 'storage_not_configured',
+          'Sem backend de Storage configurado neste build.');
+    }
+    final owner = (await userId?.call()) ?? '';
+    if (owner.isEmpty) {
+      throw ApiProblem(0, 'not_authenticated',
+          'Faça login para enviar a documentação.');
+    }
+
+    final path = kycStoragePath(
+      userId: owner,
+      docType: docType,
+      millis: DateTime.now().millisecondsSinceEpoch,
+    );
+    final uri = Uri.parse(
+        '$root/storage/v1/object/$kycStorageBucket/$path');
+    final req = http.Request('PUT', uri)
+      ..headers.addAll({
+        'authorization': 'Bearer ${await accessToken()}',
+        'content-type': contentType,
+      })
+      ..bodyBytes = bytes;
+
+    final http.Response resp;
+    try {
+      resp = await http.Response.fromStream(await _http.send(req));
+    } on ApiProblem {
+      rethrow;
+    } catch (e) {
+      throw ApiProblem(0, 'offline', 'Sem conexão com o servidor', '$e');
+    }
+    if (resp.statusCode >= 400) throw ApiProblem.fromResponse(resp);
+    return path;
+  }
+
+  /// Registra o documento (com o path do arquivo) no caso.
+  ///
+  /// É o registro que o SERVIDOR confere: o path tem que ser do próprio
+  /// parceiro e o objeto tem que existir no bucket. As flags de qualidade
+  /// vão junto — a operação vê a medida (borrão/reflexo), não a opinião.
+  Future<KycCase?> registerKycDocument(
+    String caseId, {
+    required String docType,
+    String? storagePath,
+    Map<String, dynamic> qualityFlags = const {},
+  }) async {
+    final body = <String, dynamic>{'doc_type': docType};
+    final path = storagePath?.trim();
+    if (path != null && path.isNotEmpty) body['storage_path'] = path;
+    if (qualityFlags.isNotEmpty) body['quality_flags'] = qualityFlags;
+    final j = await _req(
+      'POST',
+      '/kyc/cases/$caseId/documents',
+      idempotent: true,
+      kyc: true,
+      body: body,
     );
     return j.containsKey('case_id') ? KycCase.fromJson(j) : null;
   }

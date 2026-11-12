@@ -9,6 +9,13 @@
     <!-- Presença real: heartbeat com posição enquanto ONLINE. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Camera nativa (F9): a foto do documento do KYC.
+         `required="false"`: um aparelho sem camera ainda roda o app — a
+         tela de captura diz que a camera nao esta disponivel, em vez de o
+         app nao instalar. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     <application
         android:label="10 é Mais"
         android:name="${applicationName}"

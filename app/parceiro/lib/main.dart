@@ -4,6 +4,7 @@ import 'package:ten_auth/ten_auth.dart';
 
 import 'src/api/client.dart';
 import 'src/api/presence_api.dart';
+import 'src/api/supabase_urls.dart';
 import 'src/screens/screens.dart';
 import 'src/state/partner_controller.dart';
 import 'src/theme/theme.dart';
@@ -80,11 +81,22 @@ class _ParceiroAppState extends State<ParceiroApp> {
       baseUrl: apiBase,
       ridesBase: ridesBase,
       kycBase: kycBase,
+      // O Storage mora na raiz do projeto — a mesma que a base do GoTrue
+      // (`<raiz>/auth/v1`) já aponta. Sem ela (modo dev), o documento é
+      // registrado como PENDENTE: o registro honesto, sem arquivo inventado.
+      storageBase:
+          authBase.isEmpty ? '' : supabaseProjectRoot(authBase),
       // O token da sessão manda; o do build é o plano B. A chamada é
       // assíncrona porque o serviço renova a sessão quando o token vence.
       accessToken: () async {
         final session = await _auth?.accessToken();
         return session ?? buildToken;
+      },
+      // O dono da pasta no Storage: o `sub` da sessão. Sem sessão, não há
+      // upload (o documento fica PENDENTE — o registro honesto).
+      userId: () async {
+        final id = await _auth?.accountId();
+        return id ?? '';
       },
     );
     final auth = _auth;
