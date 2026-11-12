@@ -14,6 +14,7 @@ class AppCard extends StatelessWidget {
     this.margin,
     this.onTap,
     this.semanticLabel,
+    this.borderRadius,
   });
 
   final Widget child;
@@ -22,11 +23,16 @@ class AppCard extends StatelessWidget {
   final VoidCallback? onTap;
   final String? semanticLabel;
 
+  /// O raio do cartão. O padrão é o raio de sheet do design system; passa
+  /// um valor diferente quando o cartão precisa de outra forma (ex.: um
+  /// cartão de imagem, que é retangular).
+  final BorderRadius? borderRadius;
+
   @override
   Widget build(BuildContext context) {
     final t = tokensOf(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final radius = BorderRadius.circular(AppSpace.radiusSheet);
+    final radius = borderRadius ?? BorderRadius.circular(AppSpace.radiusSheet);
 
     final content = Padding(padding: padding, child: child);
 
@@ -46,7 +52,13 @@ class AppCard extends StatelessWidget {
               label: semanticLabel,
               child: Material(
                 type: MaterialType.transparency,
-                child: InkWell(onTap: onTap, child: content),
+                // O raio acompanha o cartão: sem isto, a onda do toque
+                // ("splash") sai quadrada por cima da borda arredondada.
+                child: InkWell(
+                  onTap: onTap,
+                  borderRadius: radius,
+                  child: content,
+                ),
               ),
             ),
     );

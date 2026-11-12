@@ -247,6 +247,163 @@ void main() {
     });
   });
 
+  group('identidade do parceiro', () {
+    test('a fila traz nome e telefone do parceiro', () async {
+      final api = apiCom(MockClient((_) async => http.Response(
+            jsonEncode({
+              'cases': [
+                {
+                  'case_id': 'c-1',
+                  'partner_user_id': '77777777-7777-4777-8777-777777777777',
+                  'partner_name': 'Parceiro KYC dev',
+                  'partner_phone': '+5596990000004',
+                  'status': 'IN_REVIEW',
+                  'created_at': '2026-11-11T10:00:00Z',
+                  'position': 1,
+                  'documents': 1,
+                },
+              ],
+            }),
+            200,
+          )));
+
+      final c = (await api.queue()).single;
+
+      expect(c.partnerName, 'Parceiro KYC dev');
+      expect(c.partnerPhone, '+5596990000004');
+      expect(c.displayName, 'Parceiro KYC dev');
+    });
+
+    test('sem nome no banco, a fila não mostra "Parceiro " vazio', () async {
+      final api = apiCom(MockClient((_) async => http.Response(
+            jsonEncode({
+              'cases': [
+                {
+                  'case_id': 'c-1',
+                  'partner_user_id': '77777777-7777-4777-8777-777777777777',
+                  'partner_name': '   ',
+                  'status': 'IN_REVIEW',
+                  'created_at': '2026-11-11T10:00:00Z',
+                  'position': 1,
+                },
+              ],
+            }),
+            200,
+          )));
+
+      final c = (await api.queue()).single;
+
+      expect(c.displayName, 'Parceiro 77777777');
+    });
+
+    test('o detalhe traz o nome, o telefone e o caminho do arquivo',
+        () async {
+      final api = apiCom(MockClient((_) async => http.Response(
+            jsonEncode({
+              'case_id': 'c-1',
+              'status': 'IN_REVIEW',
+              'partner_user_id': '77777777-7777-4777-8777-777777777777',
+              'partner_name': 'Parceiro KYC dev',
+              'partner_phone': '+5596990000004',
+              'documents': [
+                {
+                  'doc_type': 'CNH',
+                  'created_at': '2026-11-11T10:00:00Z',
+                  'upload_pending': false,
+                  'has_file': true,
+                  'storage_path':
+                      'kyc/77777777-7777-4777-8777-777777777777/c-1/CNH_1.jpg',
+                },
+              ],
+            }),
+            200,
+          )));
+
+      final d = await api.caseDetail('c-1');
+
+      expect(d.partnerName, 'Parceiro KYC dev');
+      expect(d.partnerPhone, '+5596990000004');
+      final doc = d.documents.single;
+      expect(doc.hasFile, isTrue);
+      expect(doc.storagePath,
+          'kyc/77777777-7777-4777-8777-777777777777/c-1/CNH_1.jpg');
+      expect(doc.isViewable, isTrue);
+    });
+
+    test('documento sem arquivo não vira "visualizável"', () async {
+      final api = apiCom(MockClient((_) async => http.Response(
+            jsonEncode({
+              'case_id': 'c-1',
+              'status': 'IN_REVIEW',
+              'documents': [
+                {
+                  'doc_type': 'SELFIE',
+                  'created_at': '2026-11-11T10:00:00Z',
+                  'upload_pending': true,
+                  'has_file': false,
+                  'storage_path': '',
+                },
+              ],
+            }),
+            200,
+          )));
+
+      final doc = (await api.caseDetail('c-1')).documents.single;
+
+      expect(doc.isViewable, isFalse);
+      expect(doc.uploadPending, isTrue);
+    });
+  });
+
+  group('o documento no bucket privado', () {
+    test('baixa do bucket com o PRÓPRIO token da operação (sem service role)',
+        () async {
+      late http.Request seen;
+      final api = apiCom(MockClient((req) async {
+        seen = req;
+        return http.Response.bytes([0xFF, 0xD8, 0xFF, 0xE0], 200);
+      }));
+
+      final bytes = await api.documentBytes(
+          'kyc/77777777-7777-4777-8777-777777777777/c-1/CNH_1.jpg');
+
+      expect(bytes, isNotNull);
+      expect(seen.url.toString(),
+          'http://host:54321/storage/v1/object/kyc-docs/'
+          'kyc/77777777-7777-4777-8777-777777777777/c-1/CNH_1.jpg');
+      expect(seen.headers['authorization'], 'Bearer jwt-da-operacao');
+    });
+
+    test('o Storage vem do build quando ele é informado', () async {
+      late String url;
+      final api = ConsoleApi(
+        baseUrl: 'http://host:54321/functions/v1/kyc',
+        storageBase: 'http://outro:54321/storage/v1',
+        accessToken: () async => 'jwt',
+        inner: MockClient((req) async {
+          url = req.url.toString();
+          return http.Response.bytes([0xFF, 0xD8, 0xFF], 200);
+        }),
+      );
+
+      await api.documentBytes('kyc/u/c-1/CNH_1.jpg');
+
+      expect(url, startsWith('http://outro:54321/storage/v1/object/kyc-docs/'));
+    });
+
+    test('o servidor recusa o download: devolve null, não bytes', () async {
+      final api = apiCom(MockClient((_) async => http.Response('{}', 403)));
+
+      expect(await api.documentBytes('kyc/u/c-1/CNH_1.jpg'), isNull);
+    });
+
+    test('sem rede: null (a tela mostra o estado de erro)', () async {
+      final api = apiCom(MockClient((_) async => throw Exception('sem rede')));
+
+      expect(await api.documentBytes('kyc/u/c-1/CNH_1.jpg'), isNull);
+    });
+  });
+
   group('quem está logado', () {
     test('lê o papel e se é da operação', () async {
       final api = apiCom(MockClient((_) async => http.Response(

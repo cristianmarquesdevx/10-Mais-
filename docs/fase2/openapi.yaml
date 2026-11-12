@@ -1218,6 +1218,15 @@ components:
           description: deadline of the manual review (inside the human window — SPECS §6.2)
         rejection_code: { type: string, nullable: true }
         decided_at: { type: string, format: date-time, nullable: true }
+        partner_user_id: { type: string, format: uuid, nullable: true }
+        partner_name:
+          type: string
+          nullable: true
+          description: "the partner's name (profiles.full_name) — the operation must know WHOSE registration it is judging"
+        partner_phone:
+          type: string
+          nullable: true
+          description: "the partner's phone (users.phone_e164) — so the operation can reach them"
         documents:
           type: array
           items:
@@ -1226,6 +1235,13 @@ components:
               doc_type: { type: string, enum: [CNH, CRLV, SELFIE, PROOF_ADDRESS, OTHER] }
               created_at: { type: string, format: date-time }
               upload_pending: { type: boolean }
+              storage_path:
+                type: string
+                nullable: true
+                description: "object name inside the PRIVATE bucket (kyc-docs); the client downloads it with its OWN token (Storage RLS)"
+              has_file:
+                type: boolean
+                description: 'the object really exists in the bucket (false for the legacy PENDENT marker)'
     KycQueueItem:
       type: object
       description: One case waiting for the operation's review
@@ -1233,6 +1249,8 @@ components:
       properties:
         case_id: { type: string, format: uuid }
         partner_user_id: { type: string, format: uuid }
+        partner_name: { type: string, nullable: true, description: "the partner's name (profiles.full_name)" }
+        partner_phone: { type: string, nullable: true, description: "the partner's phone (users.phone_e164)" }
         status: { type: string, enum: [IN_REVIEW, RESUBMIT] }
         sla_due_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }

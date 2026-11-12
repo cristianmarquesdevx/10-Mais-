@@ -51,11 +51,18 @@ class StatusChip extends StatelessWidget {
             Icon(icon, size: 14, color: color),
             const SizedBox(width: AppSpace.xs),
           ],
-          Text(
-            label,
-            style: AppType.caption.copyWith(
-              color: color,
-              fontWeight: FontWeight.w700,
+          // `Flexible`: com fonte grande (acessibilidade) ou numa linha
+          // apertada, o rótulo encolhe com reticências em vez de estourar
+          // o cartão.
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.caption.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],

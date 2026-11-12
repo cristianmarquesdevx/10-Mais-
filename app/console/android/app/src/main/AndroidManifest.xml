@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- O console fala com o servidor (fila, decisão e documento). A
+         permissão fica no manifest MAIN: no `debug` ela seria herdada, mas
+         o APK de RELEASE sairia sem rede — e a fila nunca carregaria. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="10 é + Console"
         android:name="${applicationName}"

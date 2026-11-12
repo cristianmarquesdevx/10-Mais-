@@ -312,21 +312,56 @@ verdade).
 
 | Artefato | Conteúdo |
 |---|---|
-| `app/console/` | **Console da operação** (Flutter mobile, Android/iOS): login por código de uso único (sem auto-cadastro e sem mexer no papel), conferência de papel (`GET /kyc/me`), fila (posição, SLA, documentos), detalhe do caso (documentação + marca de **ARQUIVO PENDENTE**) e decisão (aprovar/recusar/pedir reenvio com folha de motivo padronizado). `dart analyze` limpo, **22/22 testes** |
-| `packages/ten_auth/` | **Fonte única do login** dos três apps (passageiro, parceiro, console): `AuthService` extraído das duas cópias, `sendCode(createUser:, withRole:)`, `accountId()`. **15/15 testes**; passageiro **90/90**, parceiro **139/139** |
+| `app/console/` | **Console da operação** (Flutter mobile, Android/iOS): login por código de uso único (sem auto-cadastro e sem mexer no papel), conferência de papel (`GET /kyc/me`), fila (posição, SLA, documentos, **nome e telefone do parceiro**, atualização automática), detalhe do caso (**identidade do parceiro + o DOCUMENTO visto**, miniatura e tela cheia com zoom, marca de **ARQUIVO PENDENTE**) e decisão (aprovar/recusar/pedir reenvio com folha de motivo padronizado). `dart analyze` limpo, **33/33 testes** |
+| `packages/ten_auth/` | **Fonte única do login** dos três apps (passageiro, parceiro, console): `AuthService` extraído das duas cópias, `sendCode(createUser:, withRole:)`, `accountId()`. **18/18 testes**; passageiro **90/90**, parceiro **139/139** |
 | `supabase/migrations/20261110000600_kyc_storage.sql` | Bucket **privado** `kyc-docs` + 4 políticas de RLS (dono = 2ª pasta do path) + `api_kyc_case_document` conferindo dono e existência do objeto (422 `storage_path_not_owned` / `document_not_found`, 503 `storage_unavailable`) |
 | `supabase/migrations/20261110000700_kyc_console.sql` | `api_kyc_me()` — o papel da conta vem do `users.role` (que só o trigger escreve) |
+| `supabase/migrations/20261110000800_kyc_console_docs.sql` | A operação **vê** o documento e **identifica** o parceiro: a política de SELECT do bucket libera o papel AGENT/ADMIN (`OR app_is_agent()` — e só ele), e `api_kyc_case_get`/`api_kyc_queue` devolvem `partner_name`, `partner_phone`, `storage_path` e `has_file` |
 | `app/parceiro/lib/src/media/` | **Câmera nativa** (plugin `camera`, com stub honesto onde não há câmera) + **captura guiada** com medição de borrão/reflexo em Dart puro; upload **real** do arquivo no bucket privado antes do registro do documento |
-| `scripts/contract.py` + `scripts/test_contract.py` | Contrato como fonte única: bucket, prefixo do path, motivos de recusa e limiares de qualidade. **21/21 testes** |
-| `scripts/kyc_smoke.py` | Smoke do KYC no Postgres **com upload real** no bucket + 2 casos negativos (path alheio, objeto inexistente) + a conferência de papel (`/me`) |
+| `scripts/contract.py` + `scripts/test_contract.py` | Contrato como fonte única: bucket, prefixo do path, motivos de recusa e limiares de qualidade. **29/29 testes** |
+| `scripts/kyc_smoke.py` | Smoke do KYC no Postgres **com upload real** no bucket + 2 casos negativos (path alheio, objeto inexistente) + a conferência de papel (`/me`) + o passo "a operação vê o documento" (a operação baixa o objeto com o próprio token; um parceiro alheio é recusado) |
+| `scripts/kyc_console_seed.py` | Deixa um caso **real** na fila (com documento no bucket) para a prova visual do console — o smoke apaga o caso dele, o seed prepara a mesa |
 
-Verificação desta rodada: `ci_migrations.sh` aplica **23 migrations do zero**
+Verificação desta rodada: `ci_migrations.sh` aplica **24 migrations do zero**
 e fecha com "TODOS OS ASSERTS OK"; `kyc_smoke.py` PASS (re-executável);
 `GET /kyc/me` provado no stack local (AGENT → `is_agent: true`, PARTNER →
 `false`); upload no bucket privado provado com POST **e** PUT usando só o
 JWT do parceiro; **os dois APKs debug buildam** — parceiro em 282,5 s (com
 `android.permission.CAMERA` no manifesto) e console em 83,4 s
 (`app.dezemais.console_operacao`, rótulo "10 é + Console").
+
+### 8h. Rodada "o console usável" (12/11/2026)
+
+O console existia, mas **não dava para trabalhar**: a operação não via o
+documento (aprovava uma CNH que nunca tinha visto), não sabia de quem era o
+cadastro ("Parceiro 77777777"), e o APK de **release** saía **sem rede** (a
+permissão `INTERNET` só estava no manifest de debug). A auditoria de design
+acusou mais 12 defeitos de layout/feedback (overflow de 262 px em 360×800 com
+fonte 2.0, spinner teal sobre teal = 1:1 de contraste, inset de gesto não
+reservado, erro pintado de teal, folha de decisão sem superfície…).
+
+| Artefato | Conteúdo |
+|---|---|
+| `app/console/lib/src/api/console_api.dart` | `partnerName`/`partnerPhone`/`storagePath`/`hasFile`, base do Storage (`STORAGE_BASE`, derivada do host da função quando não vem) e `documentBytes()` — o download do bucket privado **com o próprio token** (sem service role, sem URL assinada) |
+| `app/console/lib/src/widgets/document_preview.dart` | O documento VISTO: miniatura, tela cheia com zoom, e os estados honestos (carregando / pronto / falha — um conteúdo que não é imagem aparece como falha, nunca como moldura vazia) |
+| `app/console/lib/src/screens/` | Fila com nome e telefone + polling de 30 s + erro de atualização visível; detalhe com a identidade do parceiro, o documento e as decisões; login com erro no campo/banner e spinner com contraste; folha de decisão com superfície, raio, sombra, rolagem e `SafeArea` |
+| `app/console/android/app/src/main/AndroidManifest.xml` | **`android.permission.INTERNET` no manifest `main`** — sem ela, o APK de release não tinha rede (o build de debug mascarava) |
+| `packages/ten_design/` | Mudanças **aditivas**: `EmptyState` ganhou `tone` (erro em `danger`, nunca em teal), `AppCard` ganhou `borderRadius` (a onda do toque respeita a borda) e `StatusChip` encolhe com reticências em vez de estourar |
+
+Verificação desta rodada: `dart analyze` limpo no console e no `ten_design`;
+**33/33 testes do console** (33 = 22 anteriores + identidade, documento,
+360×800 com fonte 2.0 e o download do bucket); passageiro **90/90** e parceiro
+**139/139** (o `ten_design` foi mexido); `test_contract.py` **29/29**;
+`ci_migrations.sh` aplica **24 migrations do zero** → "TODOS OS ASSERTS OK";
+`kyc_smoke.py` PASS com o passo novo (a operação baixa o documento do bucket
+privado, um parceiro alheio é recusado com 400); **APKs debug e release
+buildam** e o **release foi inspecionado**: `uses-permission:
+name='android.permission.INTERNET'` (o bloqueador de release, fechado);
+**prova no emulador** (AVD API 37): login por OTP → fila com **"Parceiro KYC
+dev / +5596990000004"** → detalhe com o **documento na tela** → tela cheia
+com zoom → folha de decisão → aprovação (o caso saiu da fila e o
+`partners.kyc_status` foi para `APPROVED` no banco).
+
 
 Bloqueio de ambiente (não de produto): `flutter pub get` no app parceiro
 falha neste host com "Building with plugins requires symlink support" — o

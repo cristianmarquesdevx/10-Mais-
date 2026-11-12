@@ -38,6 +38,10 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _codeSent = false;
   String? _error;
 
+  /// A que campo o erro pertence: um erro de campo aparece NO campo (o
+  /// `errorText`), e um erro de servidor aparece num aviso à parte.
+  _ErrorField _errorField = _ErrorField.none;
+
   static final _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]{2,}$');
 
   @override
@@ -58,7 +62,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _clearError() {
     if (_error == null) return;
-    setState(() => _error = null);
+    setState(() {
+      _error = null;
+      _errorField = _ErrorField.none;
+    });
   }
 
   void _focusAfterFrame(FocusNode node) {
@@ -81,18 +88,25 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _sendCode() async {
     final value = _email.text.trim();
     if (!_emailPattern.hasMatch(value)) {
-      setState(() => _error = 'Informe um e-mail válido, como nome@exemplo.com.');
+      setState(() {
+        _error = 'Informe um e-mail válido, como nome@exemplo.com.';
+        _errorField = _ErrorField.email;
+      });
       return;
     }
     final auth = widget.auth;
     if (auth == null) {
-      setState(() => _error = 'Console sem servidor de acesso.');
+      setState(() {
+        _error = 'Console sem servidor de acesso.';
+        _errorField = _ErrorField.none;
+      });
       return;
     }
     _emailFocus.unfocus();
     setState(() {
       _busy = true;
       _error = null;
+      _errorField = _ErrorField.none;
     });
     try {
       // `create_user: false`: o console não cria conta. Quem opera o
@@ -103,9 +117,19 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _codeSent = true);
       _focusAfterFrame(_otpFocus);
     } on AuthException catch (e) {
-      if (mounted) setState(() => _error = _authMessage(e));
+      if (mounted) {
+        setState(() {
+          _error = _authMessage(e);
+          _errorField = _ErrorField.none;
+        });
+      }
     } catch (_) {
-      if (mounted) setState(() => _error = 'Falha ao falar com o servidor de acesso.');
+      if (mounted) {
+        setState(() {
+          _error = 'Falha ao falar com o servidor de acesso.';
+          _errorField = _ErrorField.none;
+        });
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -116,13 +140,17 @@ class _LoginScreenState extends State<LoginScreen> {
     if (auth == null) return;
     final digits = _otp.text.replaceAll(RegExp(r'\D'), '');
     if (digits.length != 6) {
-      setState(() => _error = 'O código tem 6 dígitos.');
+      setState(() {
+        _error = 'O código tem 6 dígitos.';
+        _errorField = _ErrorField.otp;
+      });
       return;
     }
     _otpFocus.unfocus();
     setState(() {
       _busy = true;
       _error = null;
+      _errorField = _ErrorField.none;
     });
     try {
       await auth.verifyCode(_email.text.trim(), digits);
@@ -140,11 +168,26 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       widget.onDone();
     } on AuthException catch (e) {
-      if (mounted) setState(() => _error = _authMessage(e));
+      if (mounted) {
+        setState(() {
+          _error = _authMessage(e);
+          _errorField = _ErrorField.none;
+        });
+      }
     } on ApiProblem catch (p) {
-      if (mounted) setState(() => _error = _problemMessage(p));
+      if (mounted) {
+        setState(() {
+          _error = _problemMessage(p);
+          _errorField = _ErrorField.none;
+        });
+      }
     } catch (_) {
-      if (mounted) setState(() => _error = 'Falha ao falar com o servidor.');
+      if (mounted) {
+        setState(() {
+          _error = 'Falha ao falar com o servidor.';
+          _errorField = _ErrorField.none;
+        });
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -198,11 +241,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     _emailStep(t)
                   else
                     _otpStep(t),
-                  if (_error != null) ...[
+                  if (_error != null && _errorField == _ErrorField.none) ...[
                     const SizedBox(height: AppSpace.m),
-                    Text(_error!,
-                        key: const ValueKey('console-error'),
-                        style: AppType.label.copyWith(color: t.danger)),
+                    _ErrorBanner(message: _error!),
                   ],
                 ],
               ),
@@ -224,20 +265,24 @@ class _LoginScreenState extends State<LoginScreen> {
             autocorrect: false,
             autofillHints: const [AutofillHints.email],
             onChanged: (_) => _clearError(),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'E-mail',
               hintText: 'nome@exemplo.com',
+              errorText: _errorField == _ErrorField.email ? _error : null,
             ),
           ),
           const SizedBox(height: AppSpace.l),
-          FilledButton(
+          GradientButton(
             key: const ValueKey('console-send-code'),
             onPressed: _busy ? null : _sendCode,
             child: _busy
+                // O spinner é `onPrimary` (ink) sobre o teal: teal sobre teal
+                // seria 1:1 de contraste.
                 ? const SizedBox(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.4, color: AppColors.onPrimary))
                 : const Text('ENVIAR CÓDIGO'),
           ),
         ],
@@ -257,20 +302,22 @@ class _LoginScreenState extends State<LoginScreen> {
             autofocus: false,
             maxLength: 6,
             onChanged: (_) => _clearError(),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Código de 6 dígitos',
               counterText: '',
+              errorText: _errorField == _ErrorField.otp ? _error : null,
             ),
           ),
           const SizedBox(height: AppSpace.l),
-          FilledButton(
+          GradientButton(
             key: const ValueKey('console-enter'),
             onPressed: _busy ? null : _verify,
             child: _busy
                 ? const SizedBox(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.4, color: AppColors.onPrimary))
                 : const Text('ENTRAR'),
           ),
           const SizedBox(height: AppSpace.s),
@@ -281,3 +328,38 @@ class _LoginScreenState extends State<LoginScreen> {
         ],
       );
 }
+
+/// O erro que não pertence a um campo: um aviso com ícone, na cor de erro
+/// (o teal é marca de ação — nunca sinaliza erro).
+class _ErrorBanner extends StatelessWidget {
+  const _ErrorBanner({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = tokensOf(context);
+    return Container(
+      key: const ValueKey('console-error'),
+      padding: const EdgeInsets.all(AppSpace.m),
+      decoration: BoxDecoration(
+        color: t.danger.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppSpace.radiusCard),
+        border: Border.all(color: t.danger.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.error_outline, size: 18, color: t.danger),
+          const SizedBox(width: AppSpace.s),
+          Expanded(
+            child: Text(message, style: AppType.label.copyWith(color: t.danger)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A que campo o erro pertence.
+enum _ErrorField { none, email, otp }
+

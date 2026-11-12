@@ -18,6 +18,8 @@ void main() {
           {
             'case_id': '11111111-1111-4111-8111-111111111111',
             'partner_user_id': '77777777-7777-4777-8777-777777777777',
+            'partner_name': 'Parceiro KYC dev',
+            'partner_phone': '+5596990000004',
             'status': 'IN_REVIEW',
             'sla_due_at': DateTime.now()
                 .add(const Duration(hours: 2))
@@ -42,8 +44,29 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
   }
 
+  /// O celular pequeno de verdade: 360×800 dp.
+  Future<void> telaPequena(WidgetTester tester) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+  }
+
   Widget monta(Widget child) => MaterialApp(
         theme: buildLightTheme(),
+        home: child,
+      );
+
+  /// A tela do console com a FONTE DO SISTEMA em 2.0: é a letra grande que
+  /// estoura os layouts (a operação trabalha com o celular na mão, às
+  /// vezes com a fonte no máximo por acessibilidade).
+  Widget montaComFonteGrande(Widget child) => MaterialApp(
+        theme: buildLightTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(2.0)),
+          child: child!,
+        ),
         home: child,
       );
 
@@ -56,7 +79,11 @@ void main() {
     );
 
     await tester.pumpWidget(
-      monta(QueueScreen(controller: ConsoleController(api))),
+      monta(QueueScreen(
+        controller: ConsoleController(api),
+        // Sem polling no teste: um timer pendente no fim do teste é falha.
+        pollInterval: null,
+      )),
     );
     await tester.pumpAndSettle();
 
@@ -65,6 +92,52 @@ void main() {
     expect(find.textContaining('2 documentos'), findsOneWidget);
     expect(find.textContaining('vence em'), findsOneWidget);
     expect(find.textContaining('entrou há'), findsOneWidget);
+  });
+
+  testWidgets('a fila identifica o parceiro pelo nome e pelo telefone',
+      (tester) async {
+    await telaAlta(tester);
+    final api = ConsoleApi(
+      baseUrl: 'http://host/functions/v1/kyc',
+      accessToken: () async => 'jwt',
+      inner: MockClient((_) async => http.Response(filaJson(), 200)),
+    );
+
+    await tester.pumpWidget(
+      monta(QueueScreen(
+        controller: ConsoleController(api),
+        pollInterval: null,
+      )),
+    );
+    await tester.pumpAndSettle();
+
+    // Sem isto a operação via "Parceiro 77777777" e não sabe de quem é o
+    // cadastro — nem consegue ligar para o parceiro.
+    expect(find.text('Parceiro KYC dev'), findsOneWidget);
+    expect(find.text('+5596990000004'), findsOneWidget);
+    expect(find.textContaining('Parceiro 77777777'), findsNothing);
+  });
+
+  testWidgets('a fila não estoura em 360x800 com a fonte em 2.0',
+      (tester) async {
+    await telaPequena(tester);
+    final api = ConsoleApi(
+      baseUrl: 'http://host/functions/v1/kyc',
+      accessToken: () async => 'jwt',
+      inner: MockClient((_) async => http.Response(filaJson(), 200)),
+    );
+
+    await tester.pumpWidget(
+      montaComFonteGrande(QueueScreen(
+        controller: ConsoleController(api),
+        pollInterval: null,
+      )),
+    );
+    await tester.pumpAndSettle();
+
+    // Um overflow é uma exceção de renderização: o teste falha sozinho.
+    expect(tester.takeException(), isNull);
+    expect(find.text('Parceiro KYC dev'), findsOneWidget);
   });
 
   testWidgets('fila vazia mostra o estado vazio (não tela em branco)',
@@ -78,7 +151,11 @@ void main() {
     );
 
     await tester.pumpWidget(
-      monta(QueueScreen(controller: ConsoleController(api))),
+      monta(QueueScreen(
+        controller: ConsoleController(api),
+        // Sem polling no teste: um timer pendente no fim do teste é falha.
+        pollInterval: null,
+      )),
     );
     await tester.pumpAndSettle();
 
@@ -99,7 +176,11 @@ void main() {
     );
 
     await tester.pumpWidget(
-      monta(QueueScreen(controller: ConsoleController(api))),
+      monta(QueueScreen(
+        controller: ConsoleController(api),
+        // Sem polling no teste: um timer pendente no fim do teste é falha.
+        pollInterval: null,
+      )),
     );
     await tester.pumpAndSettle();
 
@@ -116,7 +197,11 @@ void main() {
     );
 
     await tester.pumpWidget(
-      monta(QueueScreen(controller: ConsoleController(api))),
+      monta(QueueScreen(
+        controller: ConsoleController(api),
+        // Sem polling no teste: um timer pendente no fim do teste é falha.
+        pollInterval: null,
+      )),
     );
     await tester.pumpAndSettle();
 
@@ -128,17 +213,25 @@ void main() {
           'case_id': '11111111-1111-4111-8111-111111111111',
           'status': 'IN_REVIEW',
           'position': 1,
+          'partner_user_id': '77777777-7777-4777-8777-777777777777',
+          'partner_name': 'Parceiro KYC dev',
+          'partner_phone': '+5596990000004',
           'sla': DateTime.now().add(const Duration(hours: 2)).toUtc().toIso8601String(),
           'documents': [
             {
               'doc_type': 'CNH',
               'created_at': DateTime.now().toUtc().toIso8601String(),
               'upload_pending': false,
+              'has_file': true,
+              'storage_path':
+                  'kyc/77777777-7777-4777-8777-777777777777/c-1/CNH_1.jpg',
             },
             {
               'doc_type': 'SELFIE',
               'created_at': DateTime.now().toUtc().toIso8601String(),
               'upload_pending': true,
+              'has_file': false,
+              'storage_path': '',
             },
           ],
         });
@@ -166,6 +259,33 @@ void main() {
       // O registro honesto: documento sem arquivo é pendente, e a operação
       // precisa ver isso antes de aprovar.
       expect(find.text('ARQUIVO PENDENTE'), findsOneWidget);
+      // A operação precisa saber QUEM é o parceiro.
+      expect(find.text('Parceiro KYC dev'), findsOneWidget);
+      expect(find.text('+5596990000004'), findsOneWidget);
+      // E precisa VER o documento: o pedido do arquivo sai para o bucket
+      // privado (o teste responde com um corpo que não é imagem, e a tela
+      // mostra a falha em vez de fingir que carregou).
+      expect(find.byKey(const ValueKey('document-preview')), findsOneWidget);
+      expect(find.text('Não foi possível carregar o documento.'), findsOneWidget);
+    });
+
+    testWidgets('o detalhe não estoura em 360x800 com a fonte em 2.0',
+        (tester) async {
+      await telaPequena(tester);
+      final api = ConsoleApi(
+        baseUrl: 'http://host/functions/v1/kyc',
+        accessToken: () async => 'jwt',
+        inner: MockClient((_) async => http.Response(casoJson(), 200)),
+      );
+
+      await tester.pumpWidget(
+        montaComFonteGrande(
+          CaseScreen(caseId: 'c-1', api: api, controller: ConsoleController(api)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('aprovar pede confirmação e envia APPROVED', (tester) async {

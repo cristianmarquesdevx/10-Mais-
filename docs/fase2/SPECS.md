@@ -242,12 +242,23 @@ Fase 3). Ele é um app Flutter mobile (Android/iOS), não uma página web.
 - **Conferência de papel**: `GET /kyc/me` devolve `role` e `is_agent`. A tela
   recusa na hora quem não é AGENT/ADMIN e encerra a sessão — entrar
   "funcionando" e só falhar na fila seria pior do que não entrar.
-- **Fila** (`GET /kyc/queue`): posição, prazo (SLA), tempo de espera e
-  quantos documentos o caso tem. Os estados vazio, de erro e de recusa de
-  permissão são telas explícitas — nunca uma fila inventada.
-- **Detalhe** (`GET /kyc/cases/{caseId}`): a documentação com a marca de
-  **arquivo pendente** (documento registrado sem arquivo) e a decisão
-  (aprovar, recusar ou pedir reenvio) com a folha de motivo padronizado.
+- **Fila** (`GET /kyc/queue`): posição, prazo (SLA), tempo de espera,
+  quantos documentos o caso tem e **quem é o parceiro** (`partner_name` de
+  `profiles.full_name` e `partner_phone` de `users.phone_e164`). Sem o nome,
+  a fila mostrava "Parceiro 77777777" — a operação não sabia de quem era o
+  cadastro nem como falar com a pessoa. Os estados vazio (com ação de
+  atualizar), de erro e de recusa de permissão são telas explícitas — nunca
+  uma fila inventada. A fila **se atualiza sozinha** (polling de 30 s): uma
+  fila parada, com a pessoa operando um caso, é uma fila mentirosa.
+- **Detalhe** (`GET /kyc/cases/{caseId}`): a **identidade** do parceiro (nome,
+  telefone e conta), a documentação com a marca de **arquivo pendente**
+  (documento registrado sem arquivo) e a decisão (aprovar, recusar ou pedir
+  reenvio) com a folha de motivo padronizado.
+- **O documento é VISTO**: o detalhe devolve o `storage_path` dos documentos
+  e a marca `has_file` (o objeto existe no bucket). O console baixa o objeto
+  do bucket privado **com o próprio token da operação** e mostra a imagem
+  (miniatura no detalhe, tela cheia com zoom ao toque). A operação não
+  aprova uma CNH que nunca viu.
 - **Decisão** (`POST /kyc/cases/{caseId}/review`): as mesmas regras do
   servidor — recusa e reenvio exigem `rejection_code` (422
   `rejection_code_required`), e a decisão muda o mundo (§6.3).
@@ -259,6 +270,15 @@ no **Storage privado** e a API só registra o caminho.
 
 - **Bucket**: `kyc-docs`, **privado** (`public = false`) — nenhuma URL
   anônima entrega documento de parceiro (`supabase/migrations/20261110000600_kyc_storage.sql`).
+- **Quem lê**: o dono da pasta (`storage.foldername(name)[2] = auth.uid()`)
+  **e a operação** (`OR app_is_agent()` — `supabase/migrations/20261110000800_kyc_console_docs.sql`).
+  A política não é "quem está logado": é o dono **ou** quem tem papel
+  AGENT/ADMIN. Um parceiro logado **não** lê o documento de outro.
+- **A operação baixa com o próprio token**: o console chama o REST do
+  Storage (`GET /storage/v1/object/kyc-docs/<path>`) com o JWT da sessão —
+  a RLS autoriza. Não há **service role** no caminho do produto nem URL
+  assinada compartilhável (uma URL assinada vazia o documento para quem a
+  recebe).
 - **Caminho do objeto**: `kyc/<partner_user_id>/pending/<doc>_<ms>.jpg`. A
   segunda pasta é o **dono**: é dela que a RLS do bucket tira a conclusão de
   quem pode ler e escrever (`storage.foldername(name)[2] = auth.uid()`).

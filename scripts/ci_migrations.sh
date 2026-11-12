@@ -233,6 +233,10 @@ echo "$qual" | grep -q "kyc-docs" \
   || fail "a política de leitura do KYC não restringe ao bucket kyc-docs ($qual)"
 echo "$qual" | grep -q "auth.uid()" \
   || fail "a política de leitura do KYC não restringe ao dono (auth.uid()) ($qual)"
+# A OPERAÇÃO também precisa ler: sem `app_is_agent()`, o console aprova uma
+# CNH que nunca viu (o documento fica no bucket, e o console não baixa).
+echo "$qual" | grep -q "app_is_agent()" \
+  || fail "a política de leitura do KYC não libera o papel de operação (app_is_agent) ($qual)"
 
 # 9) O comportamento FUNCIONAL do Storage do KYC.
 #
@@ -347,7 +351,75 @@ then
   fail "a API do KYC não comportou o Storage como o contrato exige (ver o erro acima)"
 fi
 
-# 10) A degradação honesta: sem o schema `storage`, uma referência real não
+# 10) O console da operação precisa de DUAS coisas que a fila não tinha:
+#     a IDENTIDADE do parceiro (nome e telefone) e o CAMINHO do documento.
+#     Sem elas, a tela mostra "Parceiro 77777777" e aprova um cadastro sem
+#     ver a foto.
+if ! psql_c -At <<'SQL'
+DO $test$
+DECLARE
+  v_agente   uuid := 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  v_parceiro uuid := '88888888-8888-4888-8888-888888888888';
+  v_case     uuid;
+  v_fila     jsonb;
+  v_detalhe  jsonb;
+  v_caso     jsonb;
+  v_doc      jsonb;
+  v_path     text;
+BEGIN
+  INSERT INTO users (id, phone_e164, role)
+  VALUES (v_agente, '+5596990000009', 'AGENT')
+  ON CONFLICT (id) DO NOTHING;
+  INSERT INTO profiles (user_id, full_name)
+  VALUES (v_parceiro, 'Parceiro de Teste')
+  ON CONFLICT (user_id) DO NOTHING;
+
+  -- A identidade do chamador é a operação (no CI: a GUC `app.test_uid`).
+  PERFORM set_config('app.test_uid', v_agente::text, false);
+
+  INSERT INTO kyc_cases (partner_user_id, status)
+  VALUES (v_parceiro, 'IN_REVIEW')
+  RETURNING id INTO v_case;
+
+  -- A FILA traz nome e telefone.
+  v_fila := api_kyc_queue(50);
+  SELECT c INTO v_caso
+    FROM jsonb_array_elements(v_fila->'cases') c
+   WHERE c->>'case_id' = v_case::text;
+  IF v_caso IS NULL THEN
+    RAISE EXCEPTION 'o caso da operação não apareceu na fila do KYC: %', v_fila;
+  END IF;
+  IF v_caso->>'partner_name' IS NULL THEN
+    RAISE EXCEPTION 'a fila do KYC não traz o nome do parceiro: %', v_caso;
+  END IF;
+  IF v_caso->>'partner_phone' IS NULL THEN
+    RAISE EXCEPTION 'a fila do KYC não traz o telefone do parceiro: %', v_caso;
+  END IF;
+
+  -- O DETALHE traz o caminho do arquivo e diz que ele EXISTE.
+  v_path := 'kyc/' || v_parceiro::text || '/' || v_case::text || '/CNH_1.jpg';
+  INSERT INTO kyc_documents (case_id, doc_type, storage_path)
+  VALUES (v_case, 'CNH', v_path);
+
+  v_detalhe := api_kyc_case_get(v_case);
+  IF v_detalhe->>'partner_name' IS NULL THEN
+    RAISE EXCEPTION 'o detalhe do KYC não traz o nome do parceiro: %', v_detalhe;
+  END IF;
+  v_doc := v_detalhe->'documents'->0;
+  IF v_doc->>'storage_path' IS DISTINCT FROM v_path THEN
+    RAISE EXCEPTION 'o detalhe do KYC não traz o caminho do arquivo: %', v_doc;
+  END IF;
+  IF (v_doc->>'has_file')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'o detalhe do KYC não marca o documento como COM arquivo: %', v_doc;
+  END IF;
+END
+$test$;
+SQL
+then
+  fail "o console não recebeu a identidade do parceiro nem o caminho do documento (ver o erro acima)"
+fi
+
+# 11) A degradação honesta: sem o schema `storage`, uma referência real não
 #     pode ser validada — e o servidor precisa dizer isso (503
 #     `storage_unavailable`), não estourar "relation does not exist".
 if ! psql_c -At <<'SQL'

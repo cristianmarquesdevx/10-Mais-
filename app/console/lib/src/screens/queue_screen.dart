@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:ten_design/ten_design.dart';
 
@@ -12,23 +14,78 @@ import 'case_screen.dart';
 /// É a PRIMEIRA tela do console (a pessoa "Cris" abre o app e a fila está
 /// na frente): o que a operação precisa primeiro é saber o que está
 /// esperando e o que vence primeiro.
+///
+/// A fila se ATUALIZA sozinha (polling): quem opera passa boa parte do
+/// expediente com um caso aberto, e a fila parada é uma fila mentirosa.
 class QueueScreen extends StatefulWidget {
-  const QueueScreen({super.key, required this.controller, this.onLogout});
+  const QueueScreen({
+    super.key,
+    required this.controller,
+    this.onLogout,
+    this.pollInterval = const Duration(seconds: 30),
+  });
 
   final ConsoleController controller;
 
   /// Sai da conta (o login volta).
   final VoidCallback? onLogout;
 
+  /// De quanto em quanto tempo a fila se atualiza sozinha.
+  ///
+  /// `null` desliga o polling (é o que os testes fazem: um timer pendente
+  /// no fim do teste é falha).
+  final Duration? pollInterval;
+
   @override
   State<QueueScreen> createState() => _QueueScreenState();
 }
 
 class _QueueScreenState extends State<QueueScreen> {
+  Timer? _poll;
+  int _lastErrorShown = 0;
+
   @override
   void initState() {
     super.initState();
     widget.controller.load();
+    widget.controller.addListener(_onControllerChanged);
+    final interval = widget.pollInterval;
+    if (interval != null && interval > Duration.zero) {
+      _poll = Timer.periodic(interval, (_) {
+        if (!mounted) return;
+        widget.controller.load(silent: true);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    widget.controller.removeListener(_onControllerChanged);
+    super.dispose();
+  }
+
+  /// O erro de uma atualização silenciosa não pode ser silencioso: a pessoa
+  /// precisa saber que a fila que está vendo pode estar velha.
+  void _onControllerChanged() {
+    final c = widget.controller;
+    if (c.error == null || c.queue.isEmpty) return;
+    if (c.errorCount == _lastErrorShown) return;
+    _lastErrorShown = c.errorCount;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.cloud_off_outlined, color: Colors.white),
+              SizedBox(width: AppSpace.s),
+              Expanded(child: Text('Não foi possível atualizar a fila.')),
+            ],
+          ),
+        ),
+      );
+    });
   }
 
   @override
@@ -56,7 +113,9 @@ class _QueueScreenState extends State<QueueScreen> {
         builder: (context, _) {
           final c = widget.controller;
           if (c.loading && c.queue.isEmpty) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(
+              child: CircularProgressIndicator(color: AppColors.primaryInk),
+            );
           }
           if (c.error != null && c.queue.isEmpty) {
             return _ErrorState(
@@ -65,12 +124,19 @@ class _QueueScreenState extends State<QueueScreen> {
             );
           }
           if (c.queue.isEmpty) {
-            return const EmptyState(
+            return EmptyState(
               icon: Icons.inbox_outlined,
               title: 'Nenhum cadastro na fila',
               message:
                   'Quando um parceiro enviar a documentação, o caso aparece aqui '
                   'com a posição e o prazo.',
+              action: OutlinedButton.icon(
+                key: const ValueKey('queue-refresh'),
+                onPressed: () => c.load(),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Atualizar agora'),
+                style: OutlinedButton.styleFrom(foregroundColor: t.ink),
+              ),
             );
           }
           return RefreshIndicator(
@@ -123,6 +189,7 @@ class _CaseTile extends StatelessWidget {
     final t = tokensOf(context);
     final now = DateTime.now();
     final overdue = item.isOverdue(now);
+    final phone = item.partnerPhone?.trim();
     return AppCard(
       onTap: () async {
         await Navigator.of(context).push(
@@ -140,38 +207,55 @@ class _CaseTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _PositionBadge(position: item.position),
               const SizedBox(width: AppSpace.m),
               Expanded(
-                child: Text(
-                  'Parceiro ${_short(item.partnerUserId)}',
-                  style: AppType.title.copyWith(color: t.ink, fontSize: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.displayName,
+                      style: AppType.title.copyWith(color: t.ink, fontSize: 16),
+                    ),
+                    if (phone != null && phone.isNotEmpty) ...[
+                      const SizedBox(height: AppSpace.xs),
+                      Text(
+                        phone,
+                        style: AppType.caption.copyWith(color: t.muted),
+                      ),
+                    ],
+                  ],
                 ),
-              ),
-              StatusChip(
-                label: overdue ? 'ATRASADO' : 'NO PRAZO',
-                tone: overdue ? StatusTone.danger : StatusTone.success,
-                icon: overdue
-                    ? Icons.warning_amber_rounded
-                    : Icons.schedule_outlined,
               ),
             ],
           ),
           const SizedBox(height: AppSpace.m),
-          Wrap(
-            spacing: AppSpace.s,
-            runSpacing: AppSpace.xs,
+          // O chip fica na SUA LINHA: na mesma linha do nome, com a fonte do
+          // sistema grande, ele estourava o cartão.
+          StatusChip(
+            label: overdue ? 'ATRASADO' : 'NO PRAZO',
+            tone: overdue ? StatusTone.danger : StatusTone.success,
+            icon: overdue
+                ? Icons.warning_amber_rounded
+                : Icons.schedule_outlined,
+          ),
+          const SizedBox(height: AppSpace.m),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _Meta(
                 icon: Icons.timer_outlined,
                 text: slaLabel(item.slaDueAt, now),
                 color: overdue ? t.danger : t.muted,
               ),
+              const SizedBox(height: AppSpace.xs),
               _Meta(
                 icon: Icons.hourglass_bottom_outlined,
                 text: waitingLabel(item.createdAt, now),
               ),
+              const SizedBox(height: AppSpace.xs),
               _Meta(
                 icon: Icons.description_outlined,
                 text: '${item.documents} '
@@ -183,11 +267,6 @@ class _CaseTile extends StatelessWidget {
       ),
     );
   }
-
-  /// O identificador curto da conta: o console mostra o ID, não o nome —
-  /// o nome vem no detalhe do caso, que é onde ele é necessário.
-  static String _short(String uuid) =>
-      uuid.length <= 8 ? uuid : uuid.substring(uuid.length - 8);
 }
 
 class _PositionBadge extends StatelessWidget {
@@ -214,6 +293,8 @@ class _PositionBadge extends StatelessWidget {
   }
 }
 
+/// Uma linha de metadado. O texto é `Flexible`: com a fonte do sistema
+/// grande, ele quebra em vez de estourar a linha.
 class _Meta extends StatelessWidget {
   const _Meta({required this.icon, required this.text, this.color});
 
@@ -226,11 +307,12 @@ class _Meta extends StatelessWidget {
     final t = tokensOf(context);
     final c = color ?? t.muted;
     return Row(
-      mainAxisSize: MainAxisSize.min,
       children: [
         Icon(icon, size: 15, color: c),
         const SizedBox(width: AppSpace.xs),
-        Text(text, style: AppType.label.copyWith(color: c)),
+        Flexible(
+          child: Text(text, style: AppType.label.copyWith(color: c)),
+        ),
       ],
     );
   }
@@ -245,6 +327,7 @@ class _ErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = tokensOf(context);
     final (icon, title, message) = switch (code) {
       'offline' => (
           Icons.cloud_off_outlined,
@@ -270,12 +353,14 @@ class _ErrorState extends StatelessWidget {
     };
     return EmptyState(
       icon: icon,
+      tone: StatusTone.danger,
       title: title,
       message: message,
       action: OutlinedButton.icon(
         onPressed: onRetry,
         icon: const Icon(Icons.refresh),
         label: const Text('Tentar de novo'),
+        style: OutlinedButton.styleFrom(foregroundColor: t.ink),
       ),
     );
   }

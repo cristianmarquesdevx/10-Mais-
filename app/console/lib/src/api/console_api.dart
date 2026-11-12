@@ -1,7 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+
+/// O bucket PRIVADO onde estão os documentos do KYC.
+///
+/// O nome é CONTRATO: vive em `scripts/contract.py`
+/// (`KYC_STORAGE_BUCKET`) e `scripts/test_contract.py` confere que esta
+/// cópia continua igual — um nome divergente faria o console procurar o
+/// documento onde ele não está.
+const String kycStorageBucket = 'kyc-docs';
 
 /// Token de acesso da sessão.
 ///
@@ -45,9 +54,9 @@ class ApiProblem implements Exception {
 
 /// A pessoa que está na fila (a conta do parceiro).
 ///
-/// O console mostra o identificador da conta, não o nome: o KYC é o cadastro
-/// do parceiro e a operação decide sobre a DOCUMENTAÇÃO. Nome e telefone
-/// aparecem no detalhe, que é onde a operação precisa deles.
+/// A fila mostra o NOME e o TELEFONE do parceiro: "Parceiro 77777777" não
+/// ajuda ninguém a decidir, e a operação precisa falar com a pessoa se o
+/// documento estiver ruim. O uuid continua disponível como reserva.
 class QueueCase {
   const QueueCase({
     required this.caseId,
@@ -57,6 +66,8 @@ class QueueCase {
     this.slaDueAt,
     this.position,
     this.documents = 0,
+    this.partnerName,
+    this.partnerPhone,
   });
 
   final String caseId;
@@ -66,6 +77,19 @@ class QueueCase {
   final DateTime? slaDueAt;
   final int? position;
   final int documents;
+
+  /// O nome do parceiro (`profiles.full_name`).
+  final String? partnerName;
+
+  /// O telefone do parceiro (`users.phone_e164`).
+  final String? partnerPhone;
+
+  /// O nome de exibição: o nome quando o banco tem, o id curto quando não.
+  String get displayName {
+    final n = partnerName?.trim();
+    if (n != null && n.isNotEmpty) return n;
+    return 'Parceiro ${shortId(partnerUserId)}';
+  }
 
   /// O caso está atrasado? O SLA é uma promessa de atendimento: passou do
   /// prazo, a operação precisa saber antes do parceiro perguntar.
@@ -83,8 +107,14 @@ class QueueCase {
             DateTime.tryParse((j['sla_due_at'] as String?) ?? '')?.toLocal(),
         position: (j['position'] as num?)?.toInt(),
         documents: (j['documents'] as num?)?.toInt() ?? 0,
+        partnerName: (j['partner_name'] as String?)?.trim(),
+        partnerPhone: (j['partner_phone'] as String?)?.trim(),
       );
 }
+
+/// O identificador curto da conta: os 8 últimos do uuid.
+String shortId(String uuid) =>
+    uuid.length <= 8 ? uuid : uuid.substring(uuid.length - 8);
 
 /// Um documento anexado ao caso.
 class KycDocument {
@@ -92,6 +122,8 @@ class KycDocument {
     required this.docType,
     required this.createdAt,
     this.uploadPending = false,
+    this.storagePath,
+    this.hasFile = false,
   });
 
   final String docType;
@@ -101,12 +133,26 @@ class KycDocument {
   /// download. A operação precisa ver isso antes de aprovar.
   final bool uploadPending;
 
+  /// O nome do objeto no bucket privado (sem barra inicial).
+  ///
+  /// Vazio quando o registro é do modo legado/pendente: aí não existe
+  /// objeto, e o console não inventa URL.
+  final String? storagePath;
+
+  /// O objeto EXISTE no bucket? O servidor confere antes de responder.
+  final bool hasFile;
+
+  /// Dá para abrir o documento? Só se há arquivo de verdade.
+  bool get isViewable => hasFile && (storagePath?.trim().isNotEmpty ?? false);
+
   factory KycDocument.fromJson(Map<String, dynamic> j) => KycDocument(
         docType: (j['doc_type'] as String?) ?? '',
         createdAt:
             DateTime.tryParse((j['created_at'] as String?) ?? '')?.toLocal() ??
                 DateTime.fromMillisecondsSinceEpoch(0),
         uploadPending: (j['upload_pending'] as bool?) ?? false,
+        storagePath: (j['storage_path'] as String?)?.trim(),
+        hasFile: (j['has_file'] as bool?) ?? false,
       );
 }
 
@@ -120,6 +166,9 @@ class CaseDetail {
     this.rejectionCode,
     this.decidedAt,
     this.documents = const [],
+    this.partnerUserId,
+    this.partnerName,
+    this.partnerPhone,
   });
 
   final String caseId;
@@ -130,6 +179,22 @@ class CaseDetail {
   final DateTime? decidedAt;
   final List<KycDocument> documents;
 
+  /// A conta do parceiro do caso.
+  final String? partnerUserId;
+
+  /// O nome do parceiro (`profiles.full_name`).
+  final String? partnerName;
+
+  /// O telefone do parceiro (`users.phone_e164`).
+  final String? partnerPhone;
+
+  /// O nome de exibição: o nome quando o banco tem, o id curto quando não.
+  String get displayName {
+    final n = partnerName?.trim();
+    if (n != null && n.isNotEmpty) return n;
+    return 'Parceiro ${shortId(partnerUserId ?? '')}';
+  }
+
   factory CaseDetail.fromJson(Map<String, dynamic> j) => CaseDetail(
         caseId: j['case_id'] as String,
         status: (j['status'] as String?) ?? '',
@@ -137,6 +202,9 @@ class CaseDetail {
         sla: DateTime.tryParse((j['sla'] as String?) ?? '')?.toLocal(),
         rejectionCode: j['rejection_code'] as String?,
         decidedAt: DateTime.tryParse((j['decided_at'] as String?) ?? '')?.toLocal(),
+        partnerUserId: (j['partner_user_id'] as String?)?.trim(),
+        partnerName: (j['partner_name'] as String?)?.trim(),
+        partnerPhone: (j['partner_phone'] as String?)?.trim(),
         documents: ((j['documents'] as List?) ?? const [])
             .map((e) => KycDocument.fromJson(Map<String, dynamic>.from(e as Map)))
             .toList(),
@@ -198,11 +266,18 @@ class ConsoleApi {
   ConsoleApi({
     required this.baseUrl,
     required this.accessToken,
+    this.storageBase,
     http.Client? inner,
   }) : _http = inner ?? http.Client();
 
   final String baseUrl;
   final TokenProvider accessToken;
+
+  /// A base do Storage REST (o bucket é privado: o GET exige o JWT do
+  /// chamador). Vem do build (`STORAGE_BASE`); quando não vem, é derivada
+  /// da base da função — o Storage mora no mesmo host do projeto.
+  final String? storageBase;
+
   final http.Client _http;
 
   /// O backend real está configurado? Vazio = o console não tem para onde
@@ -212,6 +287,19 @@ class ConsoleApi {
   String get _root {
     final b = baseUrl.trim();
     return b.endsWith('/') ? b.substring(0, b.length - 1) : b;
+  }
+
+  /// A base do Storage REST, já normalizada (sem barra final).
+  String get storageRoot {
+    final explicit = storageBase?.trim() ?? '';
+    if (explicit.isNotEmpty) {
+      return explicit.endsWith('/')
+          ? explicit.substring(0, explicit.length - 1)
+          : explicit;
+    }
+    final uri = Uri.tryParse(_root);
+    if (uri == null || uri.host.isEmpty) return '';
+    return '${uri.scheme}://${uri.authority}/storage/v1';
   }
 
   /// A rota do CONTRATO é `/kyc/...`; a base já aponta para a função, então
@@ -274,6 +362,37 @@ class ConsoleApi {
   /// O caso com a documentação.
   Future<CaseDetail> caseDetail(String caseId) async =>
       CaseDetail.fromJson(await _req('GET', '/kyc/cases/$caseId'));
+
+  /// Baixa o DOCUMENTO do bucket privado.
+  ///
+  /// Quem autoriza é a RLS do Storage: o dono da pasta ou o papel de
+  /// operação (`app_is_agent()`). O console usa o PRÓPRIO token do agente —
+  /// não há service role no caminho do produto, nem URL assinada para
+  /// compartilhar (uma URL assinada vazaria o documento).
+  ///
+  /// Devolve `null` quando não há documento, quando o servidor recusa ou
+  /// quando a rede falha: a tela mostra o estado de erro, nunca uma imagem
+  /// inventada.
+  Future<Uint8List?> documentBytes(String storagePath) async {
+    final root = storageRoot;
+    final path = storagePath.trim();
+    if (root.isEmpty || path.isEmpty) return null;
+    final encoded = path
+        .split('/')
+        .where((p) => p.isNotEmpty)
+        .map(Uri.encodeComponent)
+        .join('/');
+    final uri = Uri.parse('$root/object/$kycStorageBucket/$encoded');
+    try {
+      final req = http.Request('GET', uri);
+      req.headers['authorization'] = 'Bearer ${await accessToken()}';
+      final resp = await http.Response.fromStream(await _http.send(req));
+      if (resp.statusCode >= 400) return null;
+      return resp.bodyBytes;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// A decisão da operação.
   ///

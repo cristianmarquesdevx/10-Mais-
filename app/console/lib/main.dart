@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:ten_auth/ten_auth.dart';
 import 'package:ten_design/ten_design.dart';
 
@@ -48,6 +49,9 @@ class _ConsoleAppState extends State<ConsoleApp> {
     const authAnonKey = String.fromEnvironment('AUTH_ANON_KEY',
         defaultValue: 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH');
     const buildToken = String.fromEnvironment('API_TOKEN', defaultValue: '');
+    // O Storage REST (onde o documento do KYC está). Vazio = derivado da
+    // base da função: o Storage mora no mesmo host do projeto.
+    const storageBase = String.fromEnvironment('STORAGE_BASE', defaultValue: '');
 
     // O console não cadastra conta: ele entra em conta que já existe, com
     // papel AGENT/ADMIN. O `role` aqui é o que o GoTrue usaria se a conta
@@ -58,6 +62,7 @@ class _ConsoleAppState extends State<ConsoleApp> {
 
     _api = ConsoleApi(
       baseUrl: kycBase,
+      storageBase: storageBase.isEmpty ? null : storageBase,
       accessToken: () async {
         final session = await _auth?.accessToken();
         return session ?? buildToken;
@@ -99,6 +104,25 @@ class _ConsoleAppState extends State<ConsoleApp> {
       debugShowCheckedModeBanner: false,
       theme: buildLightTheme(),
       darkTheme: buildDarkTheme(),
+      // O console acompanha o tema do sistema: a operação trabalha de manhã
+      // e de noite, e o claro/escuro tem de ser o do aparelho.
+      themeMode: ThemeMode.system,
+      // Os ícones da barra de status e de navegação acompanham o tema,
+      // para não ficarem claros sobre o fundo claro.
+      builder: (context, child) {
+        final dark = Theme.of(context).brightness == Brightness.dark;
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: (dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+              .copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor:
+                dark ? AppColorsDark.background : AppColors.surface,
+            systemNavigationBarIconBrightness:
+                dark ? Brightness.light : Brightness.dark,
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: _signedIn
           ? QueueScreen(
               controller: _controller,

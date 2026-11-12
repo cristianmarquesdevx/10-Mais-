@@ -282,6 +282,85 @@ class ContratoTest(unittest.TestCase):
             self.assertIn(codigo, specs,
                           f"o SPEC não documenta o motivo {codigo}")
 
+    # --- KYC: o console vê o documento e identifica o parceiro ----------------
+
+    #: A migration que libera a leitura do bucket para a operação e devolve
+    #: a identidade do parceiro + o caminho do arquivo.
+    KYC_CONSOLE_DOCS_MIGRATION = (
+        "supabase/migrations/20261110000800_kyc_console_docs.sql")
+
+    def test_console_usa_o_bucket_do_contrato(self):
+        # O console lê o documento do MESMO bucket que o app do parceiro
+        # escreve: um nome divergente faria a tela mostrar "sem arquivo"
+        # com o arquivo lá no bucket.
+        console = read("app/console/lib/src/api/console_api.dart")
+        bucket = re.search(
+            r"const String kycStorageBucket\s*=\s*'([^']+)'\s*;", console)
+        self.assertIsNotNone(bucket, "console sem o bucket do KYC")
+        self.assertEqual(bucket.group(1), contract.KYC_STORAGE_BUCKET)
+
+    def test_console_baixa_o_documento_com_o_proprio_token(self):
+        # O console baixa o objeto do bucket PRIVADO pelo REST do Storage,
+        # com o token da sessão (a RLS autoriza) — e nunca com service role
+        # nem com URL assinada (que vazaria o documento).
+        console = read("app/console/lib/src/api/console_api.dart")
+        self.assertIn("/object/", console)
+        self.assertIn("Bearer ", console)
+        self.assertNotIn("service_role", console)
+        self.assertNotIn("signed", console.lower())
+
+    def test_politica_do_storage_libera_a_operacao(self):
+        # A operação precisa LER o documento do parceiro: sem `app_is_agent()`
+        # na política de SELECT, o console aprova uma CNH que nunca viu.
+        mig = read(self.KYC_CONSOLE_DOCS_MIGRATION)
+        self.assertIn("kyc_docs_select", mig)
+        self.assertIn("app_is_agent()", mig)
+        self.assertIn(contract.KYC_STORAGE_BUCKET, mig)
+
+    def test_api_kyc_devolve_a_identidade_e_o_arquivo(self):
+        # A fila e o detalhe precisam trazer o NOME, o TELEFONE e o CAMINHO
+        # do arquivo: sem eles, o console mostra "Parceiro 77777777" e
+        # aprova sem ver a foto.
+        mig = read(self.KYC_CONSOLE_DOCS_MIGRATION)
+        for campo in ("partner_name", "partner_phone", "storage_path",
+                      "has_file"):
+            self.assertIn(campo, mig,
+                          f"a API do KYC não devolve {campo}")
+
+    def test_console_tem_permissao_de_internet(self):
+        # A permissão de rede tem que estar no manifest MAIN: no `debug`
+        # ela é herdada, mas o APK de RELEASE sairia sem rede (e a fila
+        # nunca carregaria).
+        manifest = read(
+            "app/console/android/app/src/main/AndroidManifest.xml")
+        self.assertIn("android.permission.INTERNET", manifest,
+                      "o manifest main do console não pede INTERNET "
+                      "(o APK de release sairia sem rede)")
+
+    def test_ci_prova_a_politica_e_a_identidade(self):
+        # O CI não pode só contar as políticas: ele precisa provar que a
+        # operação lê o bucket e que a API devolve a identidade.
+        ci = read("scripts/ci_migrations.sh")
+        self.assertIn("app_is_agent()", ci)
+        self.assertIn("partner_name", ci)
+        self.assertIn("storage_path", ci)
+
+    def test_seed_do_console_deixa_caso_na_fila(self):
+        # A prova VISUAL do console precisa de um caso de verdade na fila:
+        # o smoke apaga o caso dele, e o seed é quem deixa um.
+        seed = read("scripts/kyc_console_seed.py")
+        self.assertIn("contract.KYC_STORAGE_BUCKET", seed)
+        self.assertIn("contract.KYC_STORAGE_PATH_PREFIX", seed)
+        self.assertIn("/functions/v1/kyc", seed)
+
+    def test_openapi_documenta_o_documento_e_a_identidade(self):
+        # O contrato publicado precisa contar o que o console consome.
+        api = read("docs/fase2/openapi.yaml")
+        for campo in ("partner_name:", "partner_phone:", "storage_path:",
+                      "has_file:"):
+            self.assertIn(campo, api,
+                          f"o openapi não documenta {campo}")
+
 
 if __name__ == "__main__":
     unittest.main()

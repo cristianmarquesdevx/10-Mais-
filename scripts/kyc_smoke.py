@@ -155,6 +155,25 @@ def delete_object(base: str, bucket: str, path: str, jwt: str) -> None:
         pass
 
 
+def download_object(base: str, bucket: str, path: str, jwt: str) -> int:
+    """Baixa um objeto do bucket pelo REST do Storage (o caminho do console).
+
+    É o que a operação faz para VER o documento: o bucket é privado, e quem
+    autoriza é a RLS — o dono da pasta ou o papel de operação.
+    """
+    url = f"{base}/storage/v1/object/{bucket}/{path}"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("authorization", f"Bearer {jwt}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except urllib.error.URLError:
+        return 0
+
+
 def header(headers: dict, name: str) -> str | None:
     """Cabeçalho sem depender da caixa (o Kong normaliza para minúsculas)."""
     low = name.lower()
@@ -378,8 +397,48 @@ def main() -> int:
         expect(status == 422 and body.get("code") == "document_not_found",
                f"path de objeto inexistente é recusado (veio {status} {body})")
 
-        # ----------------------------------------------------- 8. aprovação
-        print("8) aprovação")
+        # ------------------------- 8. a operação VÊ o documento e o parceiro
+        #
+        # Sem isso o console aprova uma CNH que nunca viu, e mostra "Parceiro
+        # 77777777" como se a operação não soubesse de quem é o cadastro.
+        print("8) a operação vê o documento e identifica o parceiro")
+        status, body, _ = call("GET", f"{kyc}/queue", agent)
+        caso_fila = next((c for c in (body.get("cases") or [])
+                          if c.get("case_id") == case_id), None)
+        expect(caso_fila is not None, "o caso está na fila da operação")
+        expect(bool(caso_fila.get("partner_name")),
+               f"a fila traz o NOME do parceiro (veio {caso_fila.get('partner_name')!r})")
+        expect(bool(caso_fila.get("partner_phone")),
+               f"a fila traz o TELEFONE do parceiro (veio {caso_fila.get('partner_phone')!r})")
+
+        status, body, _ = call("GET", f"{kyc}/cases/{case_id}", agent)
+        expect(status == 200, f"a operação abre o caso (veio {status})")
+        expect(bool(body.get("partner_name")),
+               f"o detalhe traz o nome do parceiro (veio {body.get('partner_name')!r})")
+        docs_detalhe = body.get("documents") or []
+        doc_real = next((d for d in docs_detalhe
+                         if d.get("storage_path") == path_real), None)
+        expect(doc_real is not None,
+               "o detalhe traz o caminho do arquivo do documento")
+        expect(doc_real.get("has_file") is True,
+               f"o documento é marcado como COM arquivo (veio {doc_real})")
+        expect(doc_real.get("upload_pending") is False,
+               "o documento com arquivo não está pendente")
+
+        # O arquivo BAIXA: a operação lê o objeto do bucket privado com o
+        # PRÓPRIO token (a RLS autoriza; não há service role no caminho).
+        status = download_object(api, bucket, path_real, agent)
+        expect(status == 200,
+               f"a operação baixa o documento do bucket privado (veio {status})")
+
+        # E o PARCEIRO alheio NÃO baixa: a política exige papel de operação,
+        # não "ser alguém logado".
+        status = download_object(api, bucket, path_real, outro)
+        expect(status in (400, 401, 403),
+               f"um parceiro alheio não baixa o documento (veio {status})")
+
+        # ----------------------------------------------------- 9. aprovação
+        print("9) aprovação")
         status, body, _ = call("POST", f"{kyc}/cases/{case_id}/review", agent,
                                {"decision": "APPROVED", "note": "ok"})
         expect(status == 200 and body.get("status") == "APPROVED",
@@ -392,8 +451,8 @@ def main() -> int:
         expect((body.get("partner") or {}).get("kyc_status") == "APPROVED",
                "o gate do app abre: o parceiro aprovado pode ficar online")
 
-        # -------------------------------------------------------- 9. rastro
-        print("9) rastro (auditoria, notificação, evento)")
+        # -------------------------------------------------------- 10. rastro
+        print("10) rastro (auditoria, notificação, evento)")
         # O filtro é por instante: sem ele, o rastro da execução ANTERIOR
         # faria a asserção passar mesmo sem notificação nesta.
         status, body, _ = call(
