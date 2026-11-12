@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:ten_auth/ten_auth.dart';
 
 import 'src/api/client.dart';
 import 'src/api/radar_api.dart';
-import 'src/auth/auth_service.dart';
 import 'src/screens/screens.dart';
 import 'src/state/ride_controller.dart';
 import 'src/theme/theme.dart';

@@ -21,6 +21,11 @@ dependencies:
   # Design system compartilhado (tokens, tipografia, componentes).
   ten_design:
     path: ../../packages/ten_design
+  # Autenticação compartilhada (login por código de uso único, sessão
+  # persistida e renovação automática) — fonte única com o parceiro e o
+  # console da operação.
+  ten_auth:
+    path: ../../packages/ten_auth
   # Mapa compartilhado (Console Noturno + fallback raster + camadas).
   ten_map:
     path: ../../packages/ten_map

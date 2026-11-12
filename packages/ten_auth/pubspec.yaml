@@ -1,0 +1,19 @@
+name: ten_auth
+description: "Autenticação compartilhada do 10 é + — login por código de uso único contra o Supabase Auth (GoTrue), sessão persistida e renovação automática."
+publish_to: "none"
+version: 0.1.0
+
+# "ten" é o 10 da marca; é o único ponto de troca caso o nome mude.
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0

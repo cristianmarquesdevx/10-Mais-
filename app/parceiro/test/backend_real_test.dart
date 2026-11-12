@@ -6,8 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:parceiro/src/api/client.dart';
-import 'package:parceiro/src/auth/auth_service.dart';
 import 'package:parceiro/src/screens/screens.dart';
+import 'package:ten_auth/ten_auth.dart';
 
 /// O app do parceiro fala com TRÊS backends: o ciclo de corrida no Postgres
 /// (Edge Function `rides`), o KYC no Postgres (Edge Function `kyc`) e o que
@@ -159,7 +159,12 @@ class _FakeAuth extends AuthService {
   String? attachedPhone;
 
   @override
-  Future<void> sendCode(String email) async => sentEmail = email;
+  Future<void> sendCode(
+    String email, {
+    bool createUser = true,
+    bool withRole = true,
+  }) async =>
+      sentEmail = email;
 
   @override
   Future<void> verifyCode(String email, String code) async =>

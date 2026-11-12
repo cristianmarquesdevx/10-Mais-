@@ -78,6 +78,10 @@ class AuthException implements Exception {
 
 /// Autenticação real contra o Supabase Auth (GoTrue).
 ///
+/// FONTE ÚNICA: este arquivo é o pacote compartilhado `ten_auth`, consumido
+/// pelo passageiro, pelo parceiro e pelo console da operação. Cada app tem o
+/// SEU `role` (o papel que o cadastro cria), mas o fluxo é o mesmo.
+///
 /// Dois canais, o mesmo fluxo de código de uso único (sem senha):
 ///
 ///   `sendCode(email)`  → e-mail com código de 6 dígitos → `verifyCode`
@@ -101,7 +105,8 @@ class AuthService extends ChangeNotifier {
   /// os dados é o RLS + o token do usuário.
   final String anonKey;
 
-  /// Papel criado no cadastro: PARTNER (app do parceiro) ou PASSENGER.
+  /// Papel criado no cadastro: PARTNER (app do parceiro), PASSENGER (app do
+  /// passageiro) ou AGENT (console da operação).
   final String role;
 
   final http.Client _http;
@@ -149,20 +154,30 @@ class AuthService extends ChangeNotifier {
   }
 
   /// Pede o código de 6 dígitos por e-mail. Cria a conta se ainda não existir.
-  Future<void> sendCode(String email) async {
+  ///
+  /// [createUser] = false para quem NÃO pode se cadastrar pelo app: o
+  /// console da operação só aceita conta que JÁ existe (o cadastro público
+  /// nunca cria papel de agente — o trigger do banco rebaixa qualquer papel
+  /// fora de PASSENGER/PARTNER).
+  ///
+  /// [withRole] = false omite o `data.role` do pedido: quem entra numa conta
+  /// que já existe não deve mexer no papel dela (o console entra na conta
+  /// da operação e na de um parceiro que digite o e-mail errado).
+  Future<void> sendCode(
+    String email, {
+    bool createUser = true,
+    bool withRole = true,
+  }) async {
     final clean = email.trim().toLowerCase();
     if (!_looksLikeEmail(clean)) {
       throw AuthException(AuthFailure.rejected, 'Informe um e-mail válido.');
     }
-    await _call(
-      'POST',
-      '/otp',
-      body: {
-        'email': clean,
-        'create_user': true,
-        'data': {'role': role},
-      },
-    );
+    final body = <String, dynamic>{
+      'email': clean,
+      'create_user': createUser,
+    };
+    if (withRole) body['data'] = {'role': role};
+    await _call('POST', '/otp', body: body);
   }
 
   /// Pede o código de 6 dígitos por SMS. Cria a conta se ainda não existir.
@@ -272,6 +287,15 @@ class AuthService extends ChangeNotifier {
       return null;
     }
     return _session?.accessToken;
+  }
+
+  /// O id da conta logada (`sub` do token), renovando a sessão antes.
+  ///
+  /// É o que o app precisa para montar o caminho do arquivo no Storage: o
+  /// objeto tem que ficar na pasta do DONO, e o dono é quem está logado.
+  Future<String?> accountId() async {
+    await accessToken();
+    return _session?.userId;
   }
 
   // --- telefone -------------------------------------------------------------
@@ -412,6 +436,12 @@ class AuthService extends ChangeNotifier {
     if (lower.contains('expired')) {
       return AuthException(AuthFailure.codeExpired,
           'Este código expirou. Peça um novo.', code: code);
+    }
+    // Conta que não existe: com `create_user: false` o GoTrue recusa o
+    // pedido. A mensagem é de quem está logando, não do servidor.
+    if (resp.statusCode == 404 || lower.contains('user_not_found')) {
+      return AuthException(AuthFailure.rejected,
+          'Conta não encontrada. Use uma conta já cadastrada.', code: code);
     }
     if (resp.statusCode == 401 || resp.statusCode == 403 || lower.contains('invalid')) {
       return AuthException(

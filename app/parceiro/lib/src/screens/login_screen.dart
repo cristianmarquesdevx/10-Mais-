@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:ten_auth/ten_auth.dart';
+import 'package:ten_design/ten_design.dart';
 
 import '../assets/app_assets.dart';
-import '../auth/auth_service.dart';
 import '../theme/theme.dart';
-import 'package:ten_design/ten_design.dart';
 import 'widgets/carousel_destaques.dart';
 
 /// P1 Apresentação + login (OTP F1): tela de abertura elegante do kit —

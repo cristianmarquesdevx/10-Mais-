@@ -21,9 +21,17 @@ dependencies:
   web: ^1.1.1
   shared_preferences: ^2.3.2
   geolocator: ^14.1.2
+  # Câmera nativa (F9): a captura guiada do documento do KYC. O resto do
+  # app não depende dela — a troca está isolada em `lib/src/media/`.
+  camera: ^0.12.0
   # Design system compartilhado (tokens, tipografia, componentes).
   ten_design:
     path: ../../packages/ten_design
+  # Autenticação compartilhada (login por código de uso único, sessão
+  # persistida e renovação automática) — fonte única com o passageiro e o
+  # console da operação.
+  ten_auth:
+    path: ../../packages/ten_auth
   # Mapa compartilhado (Console Noturno + fallback raster + camadas).
   ten_map:
     path: ../../packages/ten_map
