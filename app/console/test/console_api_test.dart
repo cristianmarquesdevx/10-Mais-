@@ -267,6 +267,25 @@ void main() {
             .having((e) => e.code, 'code', 'offline')),
       );
     });
+
+    test('erro de CREDENCIAL do token não vira "offline"', () async {
+      // O token pode falhar por motivo de CREDENCIAL (sessão expirada,
+      // conta sem permissão). Se isso virar 'offline', a operação culpa
+      // a rede por uma sessão morta — e a tela oferece "tentar de novo",
+      // que nunca vai resolver.
+      final api = ConsoleApi(
+        baseUrl: 'http://host:54321/functions/v1/kyc',
+        accessToken: () async =>
+            throw ApiProblem(401, 'unauthorized', 'Sessão expirada', ''),
+        inner: MockClient((_) async => http.Response('{}', 200)),
+      );
+
+      await expectLater(
+        api.queue(),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'unauthorized')),
+      );
+    });
   });
 
   group('identidade do parceiro', () {

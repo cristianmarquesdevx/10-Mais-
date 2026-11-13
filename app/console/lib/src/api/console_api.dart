@@ -370,6 +370,11 @@ class ConsoleApi {
         ..headers['authorization'] = 'Bearer ${await _token(requestTimeout)}'
         ..headers['content-type'] = 'application/json'
         ..encoding = utf8;
+    } on ApiProblem {
+      // Um erro de CREDENCIAL do provedor de token (sessão expirada,
+      // sem permissão) tem o seu próprio código: mascará-lo como
+      // 'offline' faria a operação culpar a rede por uma sessão morta.
+      rethrow;
     } on TimeoutException {
       throw ApiProblem(0, 'offline', 'A sessão não respondeu a tempo', '');
     } catch (e) {
