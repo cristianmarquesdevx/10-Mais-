@@ -593,6 +593,107 @@ guard novo é ancorado (regex que não casa comentário), todo guard
 comportamental é independente do plano, e todo guard passa por uma
 mutação antes de ser declarado fechado.**
 
+### 8m. Rodada "a 5ª verificação achou um guard INERTE" (13/11/2026)
+
+A **quinta** verificação adversarial não rodou contra o commit antigo: ela
+rodou contra o **`980a369`** (a rodada que fechou os 6 furos da 4ª
+verificação), com **dois judge's em paralelo** (um de diff/fraude, um de
+veracidade da documentação) e com a **caça-mutação executada num clone
+isolado** — o clone é descartável, então mutar o SQL e o CI não toca a
+árvore do produto.
+
+**Veredito: VERIFIED WITH CAVEATS** — e desta vez o "caveat" era
+**real**, não cosmético: **um guard inerte** (o guard existia, o CI
+passava, e mesmo assim **não provava o que dizia provar**).
+
+#### O que foi re-verificado (tudo re-executado, não relido)
+
+| Claim | Observado |
+|---|---|
+| console 64/64 + `dart analyze` limpo | **64/64**, "No issues found!" |
+| passageiro / parceiro / ten_auth / ten_design | **90/90 · 139/139 · 18/18** · analyze limpo |
+| `test_contract.py` | **40/40** |
+| `ci_migrations.sh` (26 migrations do zero) | "TODOS OS ASSERTS OK — cadeia de deploy aplicou do zero (26 migrations)" |
+| `kyc_smoke.py` | **PASS** |
+| APKs debug e release | buildam a partir de uma **cópia ASCII**; release inspecionado: `uses-permission: name='android.permission.INTERNET'` |
+| prova no emulador | fila (#1 com prazo, #2 **sem prazo por último**) → documento **visível** (CNH renderizada, com nome/telefone/conta do parceiro) → "SEM ARQUIVO" **em vermelho** → folha de decisão → aprovação (case `APPROVED`, `decided_by` = o agente, `partners.kyc_status = APPROVED`, e o caso restante **renumerado para #1** — a posição recalcula com a fila) |
+| escopo | `packages/ten_design`, `app/passageiro` e `app/parceiro` **intactos** (13 arquivos, todos de console/SQL/CI/contrato/docs) |
+
+#### F6 — o CI provava a posição do caso sem prazo, mas **não** a do **empate** sem prazo (🔴 — guard INERTE)
+
+O `fn_kyc_queue_position` alinha a posição com a ordem do `ORDER BY`
+`(sla_due_at, created_at, id)` — inclusive no **desempate por `id`**.
+Mas o CI da seção 14 criava **um** caso sem prazo: o `id` **nunca era
+desempatado** nesse caminho, e a mutação que mostra isso passava com o
+CI **verde**:
+
+```
+mutação:  (q.created_at, q.id) <= (v.created_at, v.id)
+       →  (q.created_at)     <= (v.created_at)
+resultado: 26 migrations aplicadas sem erro — TODOS OS ASSERTS OK   ← SOBREVIVEU
+```
+
+Ou seja: **um guard que não exercita o defeito é um guard inerte** — a
+mesma lição da 4ª rodada, em um lugar novo. (O **produto** estava
+certo: o desempate por `id` estava no código. O que faltava era a
+**prova** dele.)
+
+**Correção:** o CI agora cria o **par empatado** (dois casos **sem
+prazo** com a **mesma hora de entrada** — o `now()` é o timestamp da
+transação, então as duas linhas do mesmo `INSERT` recebem o mesmo
+valor) e ganhou **três asserts**:
+
+1. o **último** caso da fila é um caso sem prazo;
+2. os **grupos não se embaralham** (nenhum caso sem prazo antes de um
+   caso com prazo);
+3. os dois casos empatados têm posições **consecutivas** (a ordem entre
+   eles é o desempate por `id`).
+
+E o `test_contract.py` ganhou o guard de **presença** do par — com
+**regex ancorada** (um par **comentado** não casa; um par apagado
+também) e com mensagem curta (`assertIsNotNone`, não `assertRegex`: o
+`assertRegex` despeja o CI inteiro na falha e esconde a própria
+mensagem).
+
+**Prova de que a correção morde (repetida, no clone):**
+
+| Mutação | Antes | Depois |
+|---|---|---|
+| tira o `id` do desempate **sem prazo** | **SOBREVIVEU** (CI verde) | **MORDEU**: *"a posição não bate com a ordem da fila: … posição 89 (era 88)"* |
+| tira o `id` do desempate **com prazo** | MORDEU | MORDEU (continua) |
+| função antiga + invariante **inerte** (`WHERE false`) | (o CI falhava por um assert quebrado, não por um de verdade) | **MORDEU**: *"a fila embaralhou os grupos: um caso SEM prazo (0s) veio antes de um caso COM prazo (84s)"* — ou seja, a seção 14 tem **duas linhas de defesa** independentes |
+| **controle**: função antiga + seção 14 **inteira** neutralizada | (o CI passava) | **PASSOU** — prova de que a captura é desta seção, e não de outra |
+
+#### As 10 mutações novas desta rodada (todas mordidas, exceto onde o "não morder" era o esperado)
+
+| Mutação | Esperado | Resultado |
+|---|---|---|
+| guarda do token perde o caso do token **vazio** | falha | **mordeu** |
+| `NoSuchKey` deixa de ser mapeado | falha | **mordeu** |
+| o mapa de mensagens joga o `not_found` no genérico | falha | **mordeu** |
+| openapi promete **NULLS FIRST** | falha | **mordeu** |
+| openapi ganha um schema **legitimamente anulável** | **passa** | **passou** (sem falso positivo — o `bloco_do_schema` funciona) |
+| `id` fora do desempate **sem prazo** | falha | **SOBREVIVEU → corrigido → mordeu** |
+| `id` fora do desempate **com prazo** | falha | mordeu |
+| função antiga + invariante inerte | falha | mordeu (após re-run) |
+| **controle** (seção 14 neutra) | passa | passou |
+| par empatado **comentado** no CI (guard textual) | falha | **mordeu** (o contrato falha com mensagem de 2 linhas) |
+
+**Sobre infra, honestamente:** a primeira execução do "função antiga +
+invariante inerte" **caiu por falha de infraestrutura** (o Postgres do
+container respondeu *"the database system is shutting down"* — dois CIs
+disputando a máquina), **não** pelo assert. O resultado foi
+**descartado** e a mutação foi re-executada sozinha: aí sim o assert
+pegou. *Um verde que veio de uma queda de infra não é verde.*
+
+**A lição que entra:** *provar que o guard pega o defeito não basta —
+é preciso provar que o guard **exercita** o defeito.* A mutação que
+sobreviveu nesta rodada era invisível para quem lê o CI: o assert
+parecia completo, era completo, e mesmo assim **não cobria um caminho
+inteiro da função**. A pergunta que pegou o furo não foi "o assert
+existe?" e sim "**qual caminho da função nenhum assert exercita?**" — e
+a resposta foi: *o desempate entre casos sem prazo*.
+
 ## 9. Pendências externas (bloqueios de lançamento)
 
 1. **Advogado (trabalhista/regulatório):** contrato do passe × Tema 1.291; neutrality documentada; Lei 13.640 não cobre entregas.

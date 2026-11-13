@@ -298,7 +298,13 @@ Fase 3). Ele é um app Flutter mobile (Android/iOS), não uma página web.
   resultado **desconhecido** (≠ "NULL é o maior" do `ORDER BY`): o caso
   sem prazo recebia **posição 0** sendo o último — a tela mostrava "#1" em
   cima de "#0". O CI prova o **invariante inteiro**: a `position` de cada
-  caso da fila é o índice dele na fila + 1.
+  caso da fila é o índice dele na fila + 1 — e cobre também os **grupos**
+  (nenhum caso sem prazo antes de um caso com prazo) e o **desempate**:
+  dois casos sem prazo com a **mesma hora de entrada** ficam
+  **consecutivos**, na ordem do `id` (a mesma chave do `ORDER BY`
+  `(sla_due_at, created_at, id)`). Sem esse par, o desempate por `id`
+  nesse caminho ficaria **sem prova** — e um guard que não exercita o
+  defeito é um guard inerte (medido na 5ª verificação adversarial).
 - **Detalhe** (`GET /kyc/cases/{caseId}`): a **identidade** do parceiro (nome,
   telefone e conta), a documentação com a marca de **arquivo pendente**
   (documento registrado sem arquivo) e a decisão (aprovar, recusar ou pedir

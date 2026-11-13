@@ -699,6 +699,23 @@ INSERT INTO partners (user_id, city_id)
 VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
         '99999999-9999-4999-8999-999999999999')
 ON CONFLICT (user_id) DO NOTHING;
+-- Um segundo parceiro, para o PAR de casos SEM prazo com a MESMA hora de
+-- entrada. A ordem entre eles é desempatada pelo `id` (como no ORDER BY
+-- da fila: `sla_due_at, created_at, id`), e a POSIÇÃO tem que contar com
+-- o MESMO desempate.
+--
+-- Sem este par, o desempate por id no caminho "sem prazo" NÃO é
+-- exercido por NENHUM assert — e um guard que não exercita o defeito é
+-- um guard INERTE: a mutação que tira o `id` da comparação
+-- `(q.created_at, q.id) <= (v.created_at, v.id)` passava com o CI
+-- verde (medido na 5ª verificação adversarial).
+INSERT INTO users (id, phone_e164, role)
+VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '+5596990000067', 'PARTNER')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO partners (user_id, city_id)
+VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        '99999999-9999-4999-8999-999999999999')
+ON CONFLICT (user_id) DO NOTHING;
 SET app.test_uid = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 -- Um caso COM prazo e um SEM prazo (o `sla_due_at` é NULL).
 INSERT INTO kyc_cases (partner_user_id, status, sla_due_at, created_at)
@@ -707,20 +724,31 @@ VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'IN_REVIEW',
 INSERT INTO kyc_cases (partner_user_id, status, sla_due_at, created_at)
 VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'IN_REVIEW',
         NULL, now() + interval '1 minute');
+-- O PAR EMBATIDO: dois casos sem prazo, a MESMA hora de entrada (o
+-- `now()` é o timestamp da TRANSAÇÃO: as duas linhas do mesmo INSERT
+-- recebem o mesmo valor). Sem prazo, mesma entrada: só o `id` desempata.
+INSERT INTO kyc_cases (partner_user_id, status, sla_due_at, created_at)
+VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'IN_REVIEW',
+        NULL, now() + interval '2 minutes'),
+       ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'IN_REVIEW',
+        NULL, now() + interval '2 minutes');
 
 DO $test$
 DECLARE
   v_fila jsonb;
   v_bad  text;
-  v_sem  jsonb;
-  v_com  jsonb;
+  v_ultimo jsonb;
   v_total int;
+  v_com_max int;
+  v_sem_min int;
+  v_emp_min int;
+  v_emp_max int;
 BEGIN
   v_fila := api_kyc_queue(200);
   SELECT count(*) INTO v_total
     FROM jsonb_array_elements(v_fila->'cases');
 
-  -- O invariante: a posição é o índice na fila (+1).
+  -- (1) O invariante: a posição é o índice na fila (+1).
   SELECT string_agg(
            format('%s: posição %s (era %s)', c->>'case_id', c->>'position', ord),
            ', ')
@@ -731,27 +759,41 @@ BEGIN
     RAISE EXCEPTION 'a posição não bate com a ordem da fila: %', left(v_bad, 400);
   END IF;
 
-  -- E o caso SEM prazo é o ÚLTIMO da fila (os NULLs vão por último),
-  -- depois do caso COM prazo do mesmo parceiro.
-  SELECT c INTO v_sem
-    FROM jsonb_array_elements(v_fila->'cases') c
-   WHERE c->>'partner_user_id' = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-     AND c->>'sla_due_at' IS NULL;
-  SELECT c INTO v_com
-    FROM jsonb_array_elements(v_fila->'cases') c
-   WHERE c->>'partner_user_id' = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-     AND c->>'sla_due_at' IS NOT NULL;
-  IF v_sem IS NULL OR v_com IS NULL THEN
-    RAISE EXCEPTION 'os casos de prazo e sem prazo não apareceram na fila (% casos)',
-      v_total;
+  -- (2) O ÚLTIMO caso da fila é um caso SEM prazo (no ORDER BY ascendente
+  --     os NULLs vão por último).
+  SELECT c INTO v_ultimo
+    FROM jsonb_array_elements(v_fila->'cases') WITH ORDINALITY AS x(c, ord)
+   ORDER BY ord DESC LIMIT 1;
+  IF v_ultimo IS NULL OR (v_ultimo->>'sla_due_at') IS NOT NULL THEN
+    RAISE EXCEPTION 'o último caso da fila deveria ser um caso SEM prazo: %',
+      v_ultimo;
   END IF;
-  IF (v_sem->>'position')::int <> v_total THEN
-    RAISE EXCEPTION 'o caso sem prazo deveria ser o ÚLTIMO da fila (posição %), veio %',
-      v_total, v_sem->>'position';
+
+  -- (3) Os dois GRUPOS não se embaralham: nenhum caso sem prazo vem
+  --     antes de um caso com prazo.
+  SELECT max((c->>'position')::int) INTO v_com_max
+    FROM jsonb_array_elements(v_fila->'cases') c
+   WHERE (c->>'sla_due_at') IS NOT NULL;
+  SELECT min((c->>'position')::int) INTO v_sem_min
+    FROM jsonb_array_elements(v_fila->'cases') c
+   WHERE (c->>'sla_due_at') IS NULL;
+  IF v_com_max IS NOT NULL AND v_sem_min IS NOT NULL
+     AND v_com_max >= v_sem_min THEN
+    RAISE EXCEPTION 'a fila embaralhou os grupos: um caso SEM prazo (%s) veio antes de um caso COM prazo (%s)',
+      v_sem_min, v_com_max;
   END IF;
-  IF (v_com->>'position')::int >= (v_sem->>'position')::int THEN
-    RAISE EXCEPTION 'o caso COM prazo deveria vir antes do sem prazo: % e %',
-      v_com->>'position', v_sem->>'position';
+
+  -- (4) O PAR EMBATIDO (sem prazo, mesma entrada): as posições são
+  --     CONSECUTIVAS, porque entre eles a ordem é o desempate por `id`.
+  --     É aqui que a mutação do `(q.created_at, q.id)` morde.
+  SELECT min((c->>'position')::int), max((c->>'position')::int)
+    INTO v_emp_min, v_emp_max
+    FROM jsonb_array_elements(v_fila->'cases') c
+   WHERE c->>'partner_user_id' = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+     AND (c->>'sla_due_at') IS NULL;
+  IF v_emp_min IS NULL OR v_emp_max IS NULL OR v_emp_max - v_emp_min <> 1 THEN
+    RAISE EXCEPTION 'os casos empatados (mesma entrada, sem prazo) não são consecutivos: % e %',
+      v_emp_min, v_emp_max;
   END IF;
 END
 $test$;

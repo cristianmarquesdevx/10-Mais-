@@ -530,6 +530,39 @@ class ContratoTest(unittest.TestCase):
         ci = read("scripts/ci_migrations.sh")
         self.assertIn("a posição não bate com a ordem da fila", ci,
                       "o CI não prova que a posição concorda com a ordem")
+        # E o CI tem que EXERCITAR o desempate por `id` no caminho "sem
+        # prazo": sem o PAR de casos sem prazo com a MESMA entrada, a
+        # mutação que tira o `id` da comparação `(q.created_at, q.id) <=
+        # (v.created_at, v.id)` passa com o CI VERDE (medido na 5ª
+        # verificação adversarial: um guard que não exercita o defeito é
+        # um guard inerte).
+        #
+        # A presença do par é um guard TEXTUAL — e por isso é ANCORADO
+        # (a linha precisa ser um INSERT ATIVO: um par comentado não
+        # prova nada, e o regex não casa comentário). A prova de
+        # comportamento é o CI rodando com a função mutada.
+        par_empatido = re.search(
+            r"(?ms)^\s*INSERT INTO kyc_cases \(partner_user_id, status, "
+            r"sla_due_at, created_at\)\s*\n"
+            r"\s*VALUES \('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', "
+            r"'IN_REVIEW',\s*\n"
+            r"\s*NULL, now\(\) \+ interval '2 minutes'\),\s*\n"
+            r"\s*\('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'IN_REVIEW',\s*\n"
+            r"\s*NULL, now\(\) \+ interval '2 minutes'\);",
+            ci)
+        # `assertIsNotNone` e não `assertRegex`: o `assertRegex` despeja
+        # o arquivo INTEIRO na falha (40 KB de ruído), e uma mensagem
+        # de erro que esconde a própria mensagem é um guard ruim.
+        self.assertIsNotNone(
+            par_empatido,
+            "o CI não cria o PAR de casos sem prazo com a mesma entrada — "
+            "sem ele, o desempate por id nesse caminho fica sem prova")
+        self.assertIn("v_emp_max - v_emp_min <> 1", ci,
+                      "o CI não exige que os casos empatados sejam "
+                      "consecutivos na fila")
+        self.assertIn("a fila embaralhou os grupos", ci,
+                      "o CI não prova que os casos sem prazo vêm todos "
+                      "depois dos casos com prazo")
         # E o openapi promete o mesmo (o contrato não pode dizer uma coisa
         # e o servidor fazer outra). O texto é conferido com o whitespace
         # normalizado: o YAML quebra as linhas como quiser.
