@@ -117,6 +117,11 @@ BEGIN
     LEFT JOIN profiles p ON p.user_id = u.id
    WHERE u.id = v_case.partner_user_id;
 
+  -- O `jsonb_strip_nulls` do RETURN (abaixo) alcança o array `documents`:
+  -- um caminho VAZIO vira `null` (o `NULLIF` acima) e some da resposta —
+  -- nunca `"storage_path": null`. (Verificado no PG 16.4 e no 17.11; o
+  -- CI guarda esse comportamento — se uma versão do Postgres deixar de
+  -- recursar, o assert do `ci_migrations.sh` acusa.)
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
            'doc_type', d.doc_type,
            'created_at', d.created_at,

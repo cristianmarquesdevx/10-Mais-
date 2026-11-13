@@ -478,8 +478,20 @@ tinham introduzido **2 riscos novos** que ninguém tinha visto.
 | **F4 — o desempate externo não tinha guarda** (🔴) | O `ORDER BY q.sla_due_at, q.created_at, q.case_id` (F3-h) não era verificado por nada: trocar por `q.created_at` deixava CI **e** contrato verdes | Novo `test_a_fila_desempata_pelo_id` (exige a chave completa no `ORDER BY` externo) **e** o CI ganhou o caso de **empate** (dois casos com o mesmo prazo e a mesma entrada → a tela tem que vir pelo `id`). **Provado por mutação** → o contrato **falha** |
 | **F5 — o token não tinha prazo** (🟡) | `await accessToken()` ficava **fora** do `try` e fora do prazo: uma sessão que trava ao renovar o token travava a tela do mesmo jeito que um servidor mudo (o `finally` do controller nunca rodava → spinner eterno) | `ConsoleApi._token(limit)` envolve o token no prazo (`Future.sync(...).timeout(limit)`) e o `TimeoutException` vira `ApiProblem('offline')`. Novo teste: *"token que nunca chega vira offline (não trava a tela)"* |
 | **F6 — o download do documento pendurava para sempre** (🟡) | `documentBytes` tinha prazo **só no corpo**; o `send` e o token ficavam sem prazo (o preview pendurava 30 s+ sem botão de recuperar) | `ConsoleApi.downloadTimeout` (padrão **60 s**, maior que o da API: uma foto de celular em 3G lento leva mais que 20 s), cobrindo **cabeçalhos, corpo e token**. Dois testes novos: *"servidor mudo no download"* e *"token que nunca chega no download"* |
-| **F7 — `nullable` incoerente** (💭) | `documents[].storage_path` continuava `nullable: true`, embora o `jsonb_strip_nulls` garanta que ele só chegue **ausente** (nunca `null`) | Removido o `nullable: true`; a descrição diz *"OMITTED when the record has no path at all"* |
+| **F7 — `nullable` incoerente** (💭) | `documents[].storage_path` continuava `nullable: true`, embora o `jsonb_strip_nulls` garanta que ele só chegue **ausente** (nunca `null`) | Removido o `nullable: true`; a descrição diz *"an empty path is omitted, never sent as null"*. E o CI ganhou o **assert que prova isso**: um documento com caminho vazio tem que **OMITIR** a chave `storage_path` (nunca `null`) e vir com `has_file: false`. **Provado por mutação**: tirando o `jsonb_strip_nulls` do `RETURN`, o CI falha com *"o documento sem caminho deveria OMITIR o storage_path, mas veio {…, "storage_path": null}"* |
 | **F8 — mensagem enganosa** (💭) | O assert do `proacl` dizia *"a função não existe"* quando `proacl IS NULL` — que na verdade significa **"sem ACL explícito ⇒ PUBLIC por default"**. A mensagem mandava o investigador para o lado errado (e foi o que mascarou o F1) | Mensagem corrigida: *"a função do bucket não tem ACL explícito (⇒ PUBLIC por default) ou não existe"* |
+
+**Investigação do F7 (o que a rodada anterior não checou):** a hipótese
+era que o `jsonb_strip_nulls` do **topo** do caso não desce dentro do
+array `documents` — e então um `storage_path` vazio (o `NULLIF` o
+transforma em `null`) chegaria como `"storage_path": null`. **Medido no
+Postgres, não suposto**: o `jsonb_strip_nulls` **recursa** (PG 16.4 **e**
+17.11 — os dois ambientes do projeto), e o `null` **era** omitido. Ou
+seja: o `nullable: true` que o juiz pediu para tirar estava certo, e a
+correção do servidor era **redundante** (foi revertida — mudar o SQL sem
+necessidade é escopo). O que faltava era o **guard**: agora o CI prova o
+comportamento, e se uma versão futura do Postgres deixar de recursar, o
+assert acusa.
 
 **A lição da rodada (a mais importante de todas):** *todo assert novo
 precisa ser provado por mutação antes de ser declarado fechado* — e um
@@ -491,7 +503,7 @@ nenhum: ele dá a confiança de que o defeito foi coberto.
 
 | Artefato | Conteúdo |
 |---|---|
-| `scripts/ci_migrations.sh` | Regex do PUBLIC corrigido (`=X/postgres`) + mensagem do `proacl` honesta; assert da fila **independente do plano** (índice derrubado + seq scan forçado + caso de empate por `id`) |
+| `scripts/ci_migrations.sh` | Regex do PUBLIC corrigido (`=X/postgres`) + mensagem do `proacl` honesta; assert da fila **independente do plano** (índice derrubado + seq scan forçado + caso de empate por `id`); assert do `storage_path` **omitido** (nunca `null`) |
 | `scripts/test_contract.py` | **39/39** (37 + o openapi que não promete `null` + o desempate por `id` + o CI independente do plano) |
 | `app/console/lib/src/api/console_api.dart` | `_token(limit)` (prazo no token) e `downloadTimeout` (60 s) no download — cabeçalhos, corpo **e** token |
 | `app/console/test/console_api_test.dart` | **3 testes novos**: token pendurado na API, servidor mudo no download, token pendurado no download |

@@ -429,6 +429,31 @@ BEGIN
   IF (v_doc->>'has_file')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'um path sem objeto foi marcado como COM arquivo: %', v_doc;
   END IF;
+
+  -- E um caminho VAZIO (legado) é OMITIDO — nunca `null`.
+  --
+  -- O detalhe é montado com `jsonb_strip_nulls`, mas o `strip_nulls` do
+  -- TOPO não desce dentro do array `documents`: sem o strip interno, um
+  -- `storage_path` vazio (o `NULLIF` o transforma em `null`) chegaria
+  -- como `"storage_path": null` — um campo que o openapi promete NUNCA
+  -- existir (nulo é OMITIDO, em toda parte).
+  INSERT INTO kyc_documents (case_id, doc_type, storage_path)
+  VALUES (v_case, 'PROOF_ADDRESS', '');
+  SELECT d INTO v_doc
+    FROM jsonb_array_elements(api_kyc_case_get(v_case)->'documents') d
+   WHERE d->>'doc_type' = 'PROOF_ADDRESS';
+  IF v_doc IS NULL THEN
+    RAISE EXCEPTION 'o documento com caminho vazio sumiu do detalhe: %',
+      api_kyc_case_get(v_case);
+  END IF;
+  IF v_doc ? 'storage_path' THEN
+    RAISE EXCEPTION 'o documento sem caminho deveria OMITIR o storage_path, mas veio %', v_doc;
+  END IF;
+  IF (v_doc->>'has_file')::boolean IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'um documento sem caminho foi marcado como COM arquivo: %', v_doc;
+  END IF;
+  DELETE FROM kyc_documents
+   WHERE case_id = v_case AND doc_type = 'PROOF_ADDRESS';
 END
 $test$;
 SQL
