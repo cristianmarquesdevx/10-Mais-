@@ -496,9 +496,15 @@ BEGIN
    WHERE n.nspname = 'public'
      AND p.proname = 'fn_kyc_storage_object_present';
   IF v_acl IS NULL THEN
-    RAISE EXCEPTION 'a função fn_kyc_storage_object_present não existe';
+    -- `proacl IS NULL` = a função NÃO tem ACL explícito = o default do
+    -- Postgres = EXECUTE para PUBLIC. (Também cobre "a função não
+    -- existe" — o `SELECT` não achou nada.)
+    RAISE EXCEPTION 'a função do bucket não tem ACL explícito (⇒ PUBLIC por default) ou não existe';
   END IF;
-  IF v_acl ~* '(^|,)={1,2}/' THEN
+  -- O ACL do Postgres escreve o PUBLIC como `=X/postgres`: o `=` sem
+  -- nome é o PUBLIC, com a letra da permissão no meio. O regex precisa
+  -- casar `=<permissão>/` — casar só `=/` não detecta nada.
+  IF v_acl ~* '(^|,)=[^,=]*/' THEN
     RAISE EXCEPTION 'a função do bucket ainda é executável por PUBLIC: %', v_acl;
   END IF;
   IF v_acl ~* '(^|,)anon=' THEN
@@ -521,9 +527,20 @@ fi
 #
 #     O `ORDER BY` precisa vir ANTES do `LIMIT`: com mais casos na fila do
 #     que o limite, o caso que vence primeiro não pode ficar de fora. Este
-#     teste é COMPORTAMENTAL: ele cria 60 casos e insere o MAIS URGENTE
-#     por ÚLTIMO (a ordem do heap o deixaria fora do `LIMIT` de 50 — foi
-#     assim que o caso urgente sumiu da tela da operação).
+#     teste é COMPORTAMENTAL: ele cria muitos casos, insere o MAIS URGENTE
+#     por ÚLTIMO e exige que ele apareça na tela E em primeiro lugar.
+#
+#     O teste é **independente do plano**: sem isto, o `LIMIT` sem
+#     `ORDER BY` seria salvo pelo ACIDENTO do plano de execução (o índice
+#     parcial `idx_kyc_queue` — ou um index scan pela PK — devolve as
+#     linhas já ordenadas por outro critério, e o caso urgente entrava
+#     "por sorte"). Para provar o que é do SQL e não do plano:
+#       * o índice parcial é derrubado durante o teste;
+#       * o planner é forçado a varrer a tabela em seq scan (a ordem
+#         física = ordem de inserção), sem index scan nem bitmap scan;
+#       * os casos do teste têm prazo VENCIDO (mais urgentes que qualquer
+#         outro caso da base), para que a diferença entre o conjunto
+#         retornado com e sem o `ORDER BY` seja o próprio conjunto.
 if ! psql_c -At <<'SQL'
 INSERT INTO users (id, phone_e164, role)
 VALUES ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', '+5596990000088', 'PARTNER')
@@ -533,25 +550,48 @@ VALUES ('dddddddd-dddd-4ddd-8ddd-dddddddddddd',
         '99999999-9999-4999-8999-999999999999')
 ON CONFLICT (user_id) DO NOTHING;
 SET app.test_uid = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
--- 60 casos com prazo no FUTURO.
+-- 80 casos COM prazo vencido (menos urgente que os três abaixo, mais
+-- urgente que qualquer outro caso da base).
 INSERT INTO kyc_cases (partner_user_id, status, sla_due_at, created_at)
 SELECT 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'IN_REVIEW',
-       now() + interval '2 hours', now()
-  FROM generate_series(1, 60);
--- O MAIS URGENTE (prazo vencido), inserido por ÚLTIMO.
+       now() - interval '8 hours', now()
+  FROM generate_series(1, 80);
+-- DOIS casos com o MESMO prazo e a MESMA hora de entrada: o desempate
+-- é pelo `id` (a mesma chave do ranking). Sem ele, a ordem da tela seria
+-- arbitrária.
+INSERT INTO kyc_cases (id, partner_user_id, status, sla_due_at, created_at)
+VALUES ('11111111-1111-4111-8111-1111111111bb',
+        'dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'IN_REVIEW',
+        now() - interval '9 hours', now() + interval '1 day'),
+       ('11111111-1111-4111-8111-1111111111aa',
+        'dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'IN_REVIEW',
+        now() - interval '9 hours', now() + interval '1 day');
+-- O MAIS URGENTE (prazo vencido há 10 h), inserido por ÚLTIMO: na ordem
+-- física ele é o ÚLTIMO — e é exatamente por isso que um `LIMIT` sem
+-- `ORDER BY` o deixaria de fora da tela.
 INSERT INTO kyc_cases (partner_user_id, status, sla_due_at, created_at)
 VALUES ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'IN_REVIEW',
-        now() - interval '1 hour', now());
+        now() - interval '10 hours', now());
+
+-- O índice partial que MASCARARIA o defeito: fora.
+DROP INDEX IF EXISTS idx_kyc_queue;
+-- E o planner sem index scan: a ordem passa a ser a ordem FÍSICA (de
+-- inserção), que é a ordem ERRADA — o `ORDER BY` do SQL tem que
+-- consertar.
+SET enable_indexscan = off;
+SET enable_bitmapscan = off;
+
 DO $test$
 DECLARE
   v_fila    jsonb;
   v_urgente uuid;
   v_total   int;
+  v_ordem   text[];
 BEGIN
   SELECT id INTO v_urgente
     FROM kyc_cases
    WHERE partner_user_id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
-     AND sla_due_at < now() - interval '30 minutes';
+     AND sla_due_at < now() - interval '9 hours 30 minutes';
   IF v_urgente IS NULL THEN
     RAISE EXCEPTION 'o caso urgente de teste não foi criado';
   END IF;
@@ -574,8 +614,26 @@ BEGIN
   IF (v_fila->'cases'->0->>'case_id')::uuid <> v_urgente THEN
     RAISE EXCEPTION 'a fila não começa pelo caso mais urgente: %', v_fila->'cases'->0;
   END IF;
+
+  -- O desempate: dois casos com o MESMO (prazo, entrada) vêm pelo `id`.
+  SELECT array_agg(c->>'case_id' ORDER BY ord) INTO v_ordem
+    FROM jsonb_array_elements(v_fila->'cases') WITH ORDINALITY AS x(c, ord)
+   WHERE c->>'case_id' IN ('11111111-1111-4111-8111-1111111111aa',
+                           '11111111-1111-4111-8111-1111111111bb');
+  IF v_ordem IS DISTINCT FROM ARRAY[
+       '11111111-1111-4111-8111-1111111111aa',
+       '11111111-1111-4111-8111-1111111111bb']::text[] THEN
+    RAISE EXCEPTION 'o desempate por id da fila está errado: %', v_ordem;
+  END IF;
 END
 $test$;
+
+RESET enable_indexscan;
+RESET enable_bitmapscan;
+-- O índice de volta (o CI aplica as migrations num banco descartável,
+-- mas a cadeia precisa ficar como estava).
+CREATE INDEX IF NOT EXISTS idx_kyc_queue ON kyc_cases (sla_due_at)
+  WHERE status IN ('IN_REVIEW','RESUBMIT');
 SQL
 then
   fail "a fila não traz o caso mais urgente quando há mais casos que o limite (ver o erro acima)"

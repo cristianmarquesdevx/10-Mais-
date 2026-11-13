@@ -256,15 +256,25 @@ Fase 3). Ele é um app Flutter mobile (Android/iOS), não uma página web.
   tela **com o aviso de erro** (trocar uma informação boa por uma tela
   vazia seria pior). O erro só some quando um sucesso **mais novo** chega.
   Toda leitura tem **prazo** (`ConsoleApi.requestTimeout`, 20 s): um
-  servidor mudo vira o erro `offline`, nunca um spinner eterno. O spinner
+  servidor mudo vira o erro `offline`, nunca um spinner eterno. O prazo
+  cobre **tudo**: os cabeçalhos, o corpo **e** a busca do token (uma
+  sessão que trava ao renovar o token trava a tela do mesmo jeito que um
+  servidor mudo — e o `finally` do controller nunca rodaria). O spinner
   pertence à leitura mais recente: só ela desliga (uma leitura antiga que
   responde não pode piscar a tela).
+  O **download do documento** tem prazo próprio, **maior**
+  (`ConsoleApi.downloadTimeout`, 60 s): uma foto de celular (vários MB) num
+  3G lento leva mais que 20 s — cortar isso seria trocar "demorou" por
+  "não foi possível carregar o documento". Ainda assim tem prazo: sem ele
+  o preview ficaria pendurado para sempre, sem botão de recuperar.
   O servidor ordena a fila por `(sla_due_at, created_at, id)` **antes** do
   `LIMIT`: com `LIMIT` sem `ORDER BY`, o Postgres devolvia 50 casos
   arbitrários e o caso que vence primeiro podia não aparecer — esconder
   trabalho numa fila de atendimento. O CI prova isso **comportamentalmente**
   (mais de 50 casos na fila: o mais urgente tem que aparecer e em primeiro
-  lugar), não só pelo texto da migration.
+  lugar), e o teste é **independente do plano**: sem derrubar o índice
+  parcial e forçar o seq scan, o `LIMIT` sem `ORDER BY` passaria por
+  acidente (o índice já devolve as linhas ordenadas).
 - **Detalhe** (`GET /kyc/cases/{caseId}`): a **identidade** do parceiro (nome,
   telefone e conta), a documentação com a marca de **arquivo pendente**
   (documento registrado sem arquivo) e a decisão (aprovar, recusar ou pedir

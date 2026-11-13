@@ -445,7 +445,9 @@ migrations do zero** → "TODOS OS ASSERTS OK"; a 00900 é **idempotente**
 (3 aplicações seguidas no stack local, sem erro) e o `proacl` da função nova
 foi conferido no banco (`anon: f`, `authenticated: t`); `kyc_smoke.py` PASS
 com o `has_file` honesto provado dos dois lados; **APKs debug e release
-buildam** (release inspecionado: `uses-permission:
+buildam a partir de uma cópia ASCII do projeto** (o caminho canônico
+`10é+` quebra o AOT do Gradle no Windows — ver o bloqueio de ambiente
+abaixo; release inspecionado: `uses-permission:
 name='android.permission.INTERNET'`); **prova no emulador** refeita com o
 build novo (fila → documento na tela → "SEM ARQUIVO" → folha de decisão →
 aprovação, com o banco em `APPROVED`).
@@ -457,6 +459,65 @@ plugin `camera` é novo e o Flutter injeta plugins para **Windows**, que
 exige symlink (admin/Developer Mode; não há admin nesta máquina). Não
 afeta Android/iOS/web: o Gradle usa `.flutter-plugins-dependencies`, sem
 symlink — e o APK do Android **compila** com a câmera dentro.
+
+### 8k. Rodada "os 4 guards inertes da 3ª verificação" (12/11/2026)
+
+A **terceira** verificação adversarial do commit `6753638` voltou a dar
+**VERIFIED WITH CAVEATS** — e o achado foi mais duro que o das rodadas
+anteriores: **6 dos 8 defeitos anteriores estavam mesmo fechados** (9 das
+13 mutações falharam como deviam), mas **4 dos 8 asserts/testes novos eram
+INERTES** (passavam com o defeito presente) e o **"Extra" que a rodada
+declarava ter fechado não estava fechado**. Pior: as próprias correções
+tinham introduzido **2 riscos novos** que ninguém tinha visto.
+
+| Defeito | O que era | O que é agora |
+|---|---|---|
+| **F1 — o assert do PUBLIC era inerte** (🔴) | O regex do ACL do Postgres era `'(^|,)= {1,2}/'`, mas o ACL real do PUBLIC é **`=X/postgres`** (a letra da permissão fica no meio): o regex só casava `=/` e **nunca** detectava o PUBLIC. Provado por mutação: `GRANT … TO PUBLIC` → o CI continuava verde | O regex casa `=<permissão>/` (`'(^|,)=[^,=]*/'`) e a mensagem do `proacl IS NULL` foi corrigida (ausência de ACL explícito = **PUBLIC por default**, não "a função não existe"). **Provado por mutação**: `GRANT … TO PUBLIC` → CI falha com *"a função do bucket ainda é executável por PUBLIC"* e o ACL printado (`…,=X/postgres`) |
+| **F2 — a "prova comportamental" da fila era salva pelo PLANO** (🔴) | O teste criava 61 casos e exigia o mais urgente na tela — mas **passava** mesmo com o `ORDER BY` removido (3 execuções verdes). Motivo: o índice parcial `idx_kyc_queue` (`sla_due_at`) e o scan pela PK devolvem as linhas **já ordenadas**, então o `LIMIT` pegava as 50 mais urgentes **por acidente do plano** | O teste é agora **independente do plano**: derruba o índice parcial, **força seq scan** (`SET enable_indexscan = off; SET enable_bitmapscan = off;`) e usa casos com prazo vencido — a ordem física passa a ser a ordem ERRADA e só o `ORDER BY` do SQL conserta. **Provado por mutação**: sem o `ORDER BY` → CI falha (*"o caso mais URGENTE ficou fora da fila"*); restaurado → "TODOS OS ASSERTS OK" |
+| **F3 — o openapi honesto não tinha guarda** (🔴) | A §8j afirmava que o openapi dizia a verdade sobre o `storage_path` e o `nullable` do `KycCase`, mas **nenhum teste cobria isso**: reintroduzir a frase antiga + `nullable: true` deixava o contrato **37/37 verde** | Novo `test_o_openapi_nao_promete_um_null_que_nao_existe`: proíbe `nullable: true` no bloco do `KycCase`, proíbe a frase *"OMITTED when the document has no object"* e exige *"the LEGACY MARKER as-is"*. **Provado por mutação** → o contrato **falha** |
+| **F4 — o desempate externo não tinha guarda** (🔴) | O `ORDER BY q.sla_due_at, q.created_at, q.case_id` (F3-h) não era verificado por nada: trocar por `q.created_at` deixava CI **e** contrato verdes | Novo `test_a_fila_desempata_pelo_id` (exige a chave completa no `ORDER BY` externo) **e** o CI ganhou o caso de **empate** (dois casos com o mesmo prazo e a mesma entrada → a tela tem que vir pelo `id`). **Provado por mutação** → o contrato **falha** |
+| **F5 — o token não tinha prazo** (🟡) | `await accessToken()` ficava **fora** do `try` e fora do prazo: uma sessão que trava ao renovar o token travava a tela do mesmo jeito que um servidor mudo (o `finally` do controller nunca rodava → spinner eterno) | `ConsoleApi._token(limit)` envolve o token no prazo (`Future.sync(...).timeout(limit)`) e o `TimeoutException` vira `ApiProblem('offline')`. Novo teste: *"token que nunca chega vira offline (não trava a tela)"* |
+| **F6 — o download do documento pendurava para sempre** (🟡) | `documentBytes` tinha prazo **só no corpo**; o `send` e o token ficavam sem prazo (o preview pendurava 30 s+ sem botão de recuperar) | `ConsoleApi.downloadTimeout` (padrão **60 s**, maior que o da API: uma foto de celular em 3G lento leva mais que 20 s), cobrindo **cabeçalhos, corpo e token**. Dois testes novos: *"servidor mudo no download"* e *"token que nunca chega no download"* |
+| **F7 — `nullable` incoerente** (💭) | `documents[].storage_path` continuava `nullable: true`, embora o `jsonb_strip_nulls` garanta que ele só chegue **ausente** (nunca `null`) | Removido o `nullable: true`; a descrição diz *"OMITTED when the record has no path at all"* |
+| **F8 — mensagem enganosa** (💭) | O assert do `proacl` dizia *"a função não existe"* quando `proacl IS NULL` — que na verdade significa **"sem ACL explícito ⇒ PUBLIC por default"**. A mensagem mandava o investigador para o lado errado (e foi o que mascarou o F1) | Mensagem corrigida: *"a função do bucket não tem ACL explícito (⇒ PUBLIC por default) ou não existe"* |
+
+**A lição da rodada (a mais importante de todas):** *todo assert novo
+precisa ser provado por mutação antes de ser declarado fechado* — e um
+teste comportamental precisa ser **independente do plano**. Na rodada
+anterior eu declarei "52/52 verde" como prova; o juiz provou que **4 dos 8
+guards eram inertes** e que a "prova comportamental" da fila era salva por
+um **index scan**. Um teste que passa com o bug presente é pior que teste
+nenhum: ele dá a confiança de que o defeito foi coberto.
+
+| Artefato | Conteúdo |
+|---|---|
+| `scripts/ci_migrations.sh` | Regex do PUBLIC corrigido (`=X/postgres`) + mensagem do `proacl` honesta; assert da fila **independente do plano** (índice derrubado + seq scan forçado + caso de empate por `id`) |
+| `scripts/test_contract.py` | **39/39** (37 + o openapi que não promete `null` + o desempate por `id` + o CI independente do plano) |
+| `app/console/lib/src/api/console_api.dart` | `_token(limit)` (prazo no token) e `downloadTimeout` (60 s) no download — cabeçalhos, corpo **e** token |
+| `app/console/test/console_api_test.dart` | **3 testes novos**: token pendurado na API, servidor mudo no download, token pendurado no download |
+| `docs/fase2/openapi.yaml` | `documents[].storage_path` sem `nullable: true` |
+
+Verificação desta rodada: console **55/55** (52 + 3 novos) com `dart
+analyze` limpo; passageiro **90/90**; parceiro **139/139**; `ten_auth`
+**18/18**; `ten_design` analyze limpo; `test_contract.py` **39/39**;
+`ci_migrations.sh` aplica **25 migrations do zero** → "TODOS OS ASSERTS
+OK"; `kyc_smoke.py` **PASS** (o `has_file` honesto dos dois lados); as
+**4 mutações** desta rodada (sem `ORDER BY` na fila · com `GRANT … TO
+PUBLIC` · com a frase antiga do openapi · sem o desempate por `id`) foram
+executadas e **cada uma foi pega** pelo guard correspondente; **APKs debug e
+release buildam a partir de uma cópia ASCII do projeto** (o caminho
+canônico `10é+` quebra o AOT do Gradle no Windows — bloqueio de
+**ambiente**, não de produto; release inspecionado: `uses-permission:
+name='android.permission.INTERNET'`); **prova no emulador** refeita com o
+build novo (fila → documento na tela → "SEM ARQUIVO" → folha de decisão →
+aprovação, com o banco em `APPROVED`).
+
+Bloqueio de ambiente (não de produto): o build Flutter **no caminho
+canônico `10é+`** falha com *"Your project path contains non-ASCII
+characters"* e, com `android.overridePathCheck=true`, com *"Unable to read
+file: …\app.dill"*. A solução é compilar numa **cópia ASCII** do projeto
+(`%TEMP%\opencode\10e_build`); o código Flutter em si está correto (os
+mesmos testes passam no checkout original).
 
 ## 9. Pendências externas (bloqueios de lançamento)
 

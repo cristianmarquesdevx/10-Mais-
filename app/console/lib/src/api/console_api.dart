@@ -274,6 +274,7 @@ class ConsoleApi {
     required this.accessToken,
     this.storageBase,
     this.requestTimeout = const Duration(seconds: 20),
+    this.downloadTimeout = const Duration(seconds: 60),
     http.Client? inner,
   }) : _http = inner ?? http.Client();
 
@@ -291,7 +292,20 @@ class ConsoleApi {
   /// para sempre — e a pessoa não sabe se o servidor está fora ou lento.
   /// Passado o prazo, a leitura vira o erro `offline` (a tela avisa e
   /// oferece tentar de novo).
+  ///
+  /// O prazo cobre **tudo**: os cabeçalhos, o corpo **e** a busca do
+  /// token. Um token que nunca chega trava a tela do mesmo jeito que um
+  /// servidor mudo — e o `finally` do controller nunca roda.
   final Duration requestTimeout;
+
+  /// Quanto tempo a operação espera o **documento** baixar.
+  ///
+  /// O download tem prazo próprio, **maior** que o da API: uma foto de
+  /// celular (vários MB) num 3G lento leva mais que 20 s — cortar isso
+  /// seria trocar "demorou" por "não foi possível carregar o documento".
+  /// Ainda assim tem prazo: sem ele, o preview ficaria pendurado para
+  /// sempre, sem botão de recuperar.
+  final Duration downloadTimeout;
 
   final http.Client _http;
 
@@ -326,6 +340,14 @@ class ConsoleApi {
     return path;
   }
 
+  /// O token da sessão, com **prazo**.
+  ///
+  /// O provedor pode devolver o token de imediato (`FutureOr`), mas a
+  /// sessão também pode precisar **renovar** o token (uma ida ao servidor
+  /// que, se travar, trava a tela junto). O prazo cobre essa espera.
+  Future<String> _token(Duration limit) =>
+      Future<String>.sync(() => accessToken()).timeout(limit);
+
   Future<Map<String, dynamic>> _req(
     String method,
     String path, {
@@ -338,14 +360,21 @@ class ConsoleApi {
     }
     final uri = Uri.parse('$_root${_path(path)}')
         .replace(queryParameters: query);
-    final headers = {
-      'authorization': 'Bearer ${await accessToken()}',
-      'content-type': 'application/json',
-    };
 
-    final req = http.Request(method, uri)
-      ..headers.addAll(headers)
-      ..encoding = utf8;
+    final http.Request req;
+    try {
+      // O TOKEN também tem prazo: um token que nunca chega trava a tela do
+      // mesmo jeito que um servidor mudo (o `finally` do controller nunca
+      // rodaria e o spinner ficaria preso para sempre).
+      req = http.Request(method, uri)
+        ..headers['authorization'] = 'Bearer ${await _token(requestTimeout)}'
+        ..headers['content-type'] = 'application/json'
+        ..encoding = utf8;
+    } on TimeoutException {
+      throw ApiProblem(0, 'offline', 'A sessão não respondeu a tempo', '');
+    } catch (e) {
+      throw ApiProblem(0, 'offline', 'Sem conexão com o servidor', '$e');
+    }
     if (body != null) req.body = jsonEncode(body);
 
     final http.Response resp;
@@ -407,9 +436,16 @@ class ConsoleApi {
     final uri = Uri.parse('$root/object/$kycStorageBucket/$encoded');
     try {
       final req = http.Request('GET', uri);
-      req.headers['authorization'] = 'Bearer ${await accessToken()}';
-      final resp = await http.Response.fromStream(await _http.send(req))
-          .timeout(requestTimeout);
+      // O token tem prazo (mesmo problema da API: um token que não chega
+      // trava o preview para sempre).
+      req.headers['authorization'] =
+          'Bearer ${await _token(downloadTimeout)}';
+      // O download tem prazo próprio, **maior** que o da API (uma foto de
+      // celular em 3G lento leva mais que 20 s) — e cobre os cabeçalhos E
+      // o corpo: um `.timeout` só no `fromStream` não protege nada, porque
+      // o `send` já esperaria para sempre.
+      final streamed = await _http.send(req).timeout(downloadTimeout);
+      final resp = await http.Response.fromStream(streamed).timeout(downloadTimeout);
       if (resp.statusCode >= 400) return null;
       return resp.bodyBytes;
     } catch (_) {

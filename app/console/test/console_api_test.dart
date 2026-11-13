@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:console_operacao/src/api/console_api.dart';
@@ -245,6 +246,27 @@ void main() {
       );
       expect(chamou, isFalse);
     });
+
+    test('token que nunca chega vira offline (não trava a tela)', () async {
+      // A sessão pode precisar renovar o token: se essa espera travar,
+      // o `finally` do controller nunca roda e o spinner fica preso para
+      // sempre. O token tem prazo como a requisição.
+      final api = ConsoleApi(
+        baseUrl: 'http://host:54321/functions/v1/kyc',
+        accessToken: () async {
+          await Completer<void>().future;
+          return 'jwt';
+        },
+        requestTimeout: const Duration(milliseconds: 50),
+        inner: MockClient((_) async => http.Response('{}', 200)),
+      );
+
+      await expectLater(
+        api.queue(),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'offline')),
+      );
+    });
   });
 
   group('identidade do parceiro', () {
@@ -399,6 +421,38 @@ void main() {
 
     test('sem rede: null (a tela mostra o estado de erro)', () async {
       final api = apiCom(MockClient((_) async => throw Exception('sem rede')));
+
+      expect(await api.documentBytes('kyc/u/c-1/CNH_1.jpg'), isNull);
+    });
+
+    test('servidor mudo no download: null em vez de travar para sempre',
+        () async {
+      // O download tem prazo próprio: sem ele, o preview ficava pendurado
+      // para sempre (sem botão de recuperar, porque o `finally` nunca
+      // rodava).
+      final api = ConsoleApi(
+        baseUrl: 'http://host:54321/functions/v1/kyc',
+        accessToken: () async => 'jwt',
+        downloadTimeout: const Duration(milliseconds: 50),
+        inner: MockClient((_) async {
+          await Completer<void>().future;
+          return http.Response.bytes([0xFF], 200);
+        }),
+      );
+
+      expect(await api.documentBytes('kyc/u/c-1/CNH_1.jpg'), isNull);
+    });
+
+    test('token que nunca chega no download: null (não trava)', () async {
+      final api = ConsoleApi(
+        baseUrl: 'http://host:54321/functions/v1/kyc',
+        accessToken: () async {
+          await Completer<void>().future;
+          return 'jwt';
+        },
+        downloadTimeout: const Duration(milliseconds: 50),
+        inner: MockClient((_) async => http.Response.bytes([0xFF], 200)),
+      );
 
       expect(await api.documentBytes('kyc/u/c-1/CNH_1.jpg'), isNull);
     });

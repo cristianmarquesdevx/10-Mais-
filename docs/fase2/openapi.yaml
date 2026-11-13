@@ -1240,8 +1240,7 @@ components:
               upload_pending: { type: boolean }
               storage_path:
                 type: string
-                nullable: true
-                description: "object name inside the PRIVATE bucket (kyc-docs); the client downloads it with its OWN token (Storage RLS). For a document registered WITHOUT an object, the server returns the LEGACY MARKER as-is (e.g. `PENDENTE/<case>/CNH`) — it is NOT a real object, and `has_file` is false for it (the client must not try to download the marker)"
+                description: "object name inside the PRIVATE bucket (kyc-docs); the client downloads it with its OWN token (Storage RLS). For a document registered WITHOUT an object, the server returns the LEGACY MARKER as-is (e.g. `PENDENTE/<case>/CNH`) — it is NOT a real object, and `has_file` is false for it (the client must not try to download the marker). OMITTED when the record has no path at all (the column is NOT NULL, so this is the empty-string case)"
               has_file:
                 type: boolean
                 description: 'the object really EXISTS in the bucket — the server asks the bucket itself (fn_kyc_storage_object_present), so a path pointing to nothing is false and the client never shows "ARQUIVO OK" for a missing file'

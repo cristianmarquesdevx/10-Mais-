@@ -440,12 +440,46 @@ class ContratoTest(unittest.TestCase):
         # CI precisa criar MAIS casos que o limite e exigir que o mais
         # urgente apareça (é o defeito que escondia trabalho).
         ci = read("scripts/ci_migrations.sh")
-        self.assertIn("generate_series(1, 60)", ci,
-                      "o CI não cria uma fila maior que o limite")
+        m = re.search(r"generate_series\(1,\s*(\d+)\)", ci)
+        self.assertIsNotNone(m, "o CI não cria uma fila maior que o limite")
+        self.assertGreater(int(m.group(1)), 50,
+                           "o CI não cria uma fila maior que o limite de 50")
         self.assertIn("api_kyc_queue(50)", ci,
                       "o CI não exercita a fila no limite")
         self.assertIn("caso mais URGENTE", ci,
                       "o CI não exige o caso mais urgente na tela")
+        # E o teste tem que ser INDEPENDENTE DO PLANO: sem forçar o seq
+        # scan, o índice (ou o scan pela PK) entrega as linhas já
+        # ordenadas e o defeito passaria batido.
+        self.assertIn("enable_indexscan = off", ci,
+                      "o CI não neutraliza o plano de execução")
+        self.assertIn("DROP INDEX IF EXISTS idx_kyc_queue", ci,
+                      "o CI não neutraliza o índice que mascara o defeito")
+
+    def test_o_openapi_nao_promete_um_null_que_nao_existe(self):
+        # O `KycCase` é montado com `jsonb_strip_nulls`: um campo nulo é
+        # **OMITIDO**, nunca enviado como `null`. Marcar `nullable: true`
+        # faz o leitor esperar a chave presente com `null` — uma promessa
+        # que o servidor não cumpre.
+        api = read("docs/fase2/openapi.yaml")
+        caso = api[api.index("    KycCase:"):api.index("    KycQueueItem:")]
+        self.assertNotIn("nullable: true", caso,
+                         "o KycCase promete campos nulos que são omitidos")
+        # E a frase antiga (falsa) do `storage_path` não pode voltar: o
+        # marcador `PENDENTE/...` volta **como está**, não omitido.
+        self.assertNotIn("OMITTED when the document has no object", api,
+                         "o openapi volta a prometer a omissão do marcador")
+        self.assertIn("the LEGACY MARKER as-is", api,
+                      "o openapi não diz que o marcador legado volta como está")
+
+    def test_a_fila_desempata_pelo_id(self):
+        # A ordenação FINAL (o `jsonb_agg` externo) precisa usar a MESMA
+        # chave do ranking: prazo, entrada e **id**. Sem o desempate, dois
+        # casos com o mesmo prazo e a mesma entrada saíam em ordem
+        # arbitrária na tela da operação.
+        mig = read(self.KYC_CONSOLE_FIX_MIGRATION)
+        self.assertIn("ORDER BY q.sla_due_at, q.created_at, q.case_id", mig,
+                      "a ordenação final da fila não desempata pelo id")
 
     def test_openapi_documenta_o_documento_e_a_identidade(self):
         # O contrato publicado precisa contar o que o console consome.
