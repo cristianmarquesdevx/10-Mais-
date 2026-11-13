@@ -33,6 +33,23 @@ def read(rel: str) -> str:
         return fh.read()
 
 
+def bloco_do_schema(api: str, nome: str) -> str:
+    """O bloco YAML de um schema, do nome dele até o PRÓXIMO schema.
+
+    Por que não um slice fixo (`api[api.index("KycCase:"):api.index
+    ("KycQueueItem:")]`): ele engolia qualquer schema que caísse no
+    meio — e um schema novo, legitimamente anulável, faria o assert
+    rejeitar um contrato CORRETO (falso positivo). Aqui o bloco termina
+    no próximo schema (mesma indentação), e não num nome escolhido.
+    """
+    m = re.search(r"(?m)^    %s:\s*$" % re.escape(nome), api)
+    if not m:
+        raise AssertionError("o openapi não tem o schema %s" % nome)
+    ini = m.end()
+    fim = re.search(r"(?m)^    [A-Za-z0-9_]+:\s*$", api[ini:])
+    return api[ini:ini + fim.start()] if fim else api[ini:]
+
+
 class ContratoTest(unittest.TestCase):
 
     def test_valores_do_contrato(self):
@@ -296,6 +313,12 @@ class ContratoTest(unittest.TestCase):
     KYC_CONSOLE_FIX_MIGRATION = (
         "supabase/migrations/20261110000900_kyc_console_docs_fix.sql")
 
+    #: A migration que alinha a POSIÇÃO do caso com a ORDEM da fila (a
+    #: comparação de linha tratava o prazo nulo como "desconhecido", e o
+    #: caso sem prazo recebia posição 0 sendo o último da fila).
+    KYC_QUEUE_POSITION_MIGRATION = (
+        "supabase/migrations/20261113001000_kyc_queue_position_null.sql")
+
     def test_console_usa_o_bucket_do_contrato(self):
         # O console lê o documento do MESMO bucket que o app do parceiro
         # escreve: um nome divergente faria a tela mostrar "sem arquivo"
@@ -365,7 +388,12 @@ class ContratoTest(unittest.TestCase):
         # linhas arbitrárias e o caso que vence primeiro podia não estar
         # na tela — esconder trabalho numa fila de atendimento.
         mig = read(self.KYC_CONSOLE_FIX_MIGRATION)
+        self.assertIn("CREATE OR REPLACE FUNCTION api_kyc_queue", mig,
+                      "a api_kyc_queue não existe na migration")
         fila = mig[mig.index("CREATE OR REPLACE FUNCTION api_kyc_queue"):]
+        self.assertIn("ORDER BY c.sla_due_at, c.created_at, c.id", fila,
+                      "a fila não ordena por (prazo, entrada, id)")
+        self.assertIn("LIMIT", fila, "a fila não tem limite")
         order = fila.index("ORDER BY c.sla_due_at, c.created_at, c.id")
         limite = fila.index("LIMIT")
         self.assertLess(order, limite,
@@ -451,10 +479,19 @@ class ContratoTest(unittest.TestCase):
         # E o teste tem que ser INDEPENDENTE DO PLANO: sem forçar o seq
         # scan, o índice (ou o scan pela PK) entrega as linhas já
         # ordenadas e o defeito passaria batido.
-        self.assertIn("enable_indexscan = off", ci,
-                      "o CI não neutraliza o plano de execução")
-        self.assertIn("DROP INDEX IF EXISTS idx_kyc_queue", ci,
-                      "o CI não neutraliza o índice que mascara o defeito")
+        #
+        # A linha precisa estar **ATIVA**: um grep de substring crua
+        # aceitava `# SET enable_indexscan = off;` (comentado) — e o
+        # guard passaria sem a neutralização existir. Por isso o regex
+        # ancora no início da linha (um comentário começa com `#`).
+        self.assertRegex(
+            ci, r"(?m)^\s*SET enable_indexscan = off;\s*$",
+            "o CI não neutraliza o plano de execução (a linha precisa "
+            "estar ATIVA, não comentada)")
+        self.assertRegex(
+            ci, r"(?m)^\s*DROP INDEX IF EXISTS idx_kyc_queue;\s*$",
+            "o CI não neutraliza o índice que mascara o defeito (a linha "
+            "precisa estar ATIVA, não comentada)")
 
     def test_o_openapi_nao_promete_um_null_que_nao_existe(self):
         # O `KycCase` é montado com `jsonb_strip_nulls`: um campo nulo é
@@ -462,15 +499,46 @@ class ContratoTest(unittest.TestCase):
         # faz o leitor esperar a chave presente com `null` — uma promessa
         # que o servidor não cumpre.
         api = read("docs/fase2/openapi.yaml")
-        caso = api[api.index("    KycCase:"):api.index("    KycQueueItem:")]
-        self.assertNotIn("nullable: true", caso,
-                         "o KycCase promete campos nulos que são omitidos")
+        caso = bloco_do_schema(api, "KycCase")
+        # Regex, e não substring: `nullable:  true` (dois espaços) ou
+        # `nullable : true` passariam num `assertNotIn("nullable: true")`.
+        self.assertIsNone(
+            re.search(r"\bnullable\s*:\s*true\b", caso),
+            "o KycCase promete campos nulos que são omitidos")
         # E a frase antiga (falsa) do `storage_path` não pode voltar: o
         # marcador `PENDENTE/...` volta **como está**, não omitido.
         self.assertNotIn("OMITTED when the document has no object", api,
                          "o openapi volta a prometer a omissão do marcador")
         self.assertIn("the LEGACY MARKER as-is", api,
                       "o openapi não diz que o marcador legado volta como está")
+
+    def test_a_posicao_da_fila_concorda_com_a_ordem(self):
+        # O `fn_kyc_queue_position` contava com comparação de LINHA, e
+        # numa comparação de linha um NULL torna o resultado
+        # desconhecido (não "NULL é o maior", como no ORDER BY): um caso
+        # SEM prazo recebia posição 0 sendo o ÚLTIMO da fila — a tela
+        # mostrava "#1" em cima de "#0".
+        #
+        # A correção está na migration `20261113001000`; o CI prova o
+        # invariante inteiro (a `position` de cada caso é o índice dele
+        # na fila + 1).
+        mig = read(self.KYC_QUEUE_POSITION_MIGRATION)
+        self.assertIn("v.sla_due_at IS NULL", mig,
+                      "a posição da fila não trata o caso sem prazo")
+        self.assertIn("q.sla_due_at IS NOT NULL", mig,
+                      "a posição da fila não trata o caso sem prazo")
+        ci = read("scripts/ci_migrations.sh")
+        self.assertIn("a posição não bate com a ordem da fila", ci,
+                      "o CI não prova que a posição concorda com a ordem")
+        # E o openapi promete o mesmo (o contrato não pode dizer uma coisa
+        # e o servidor fazer outra). O texto é conferido com o whitespace
+        # normalizado: o YAML quebra as linhas como quiser.
+        api = " ".join(read("docs/fase2/openapi.yaml").split())
+        self.assertIn("sorts LAST (NULLS LAST)", api,
+                      "o openapi não diz que o caso sem prazo é o último")
+        self.assertIn(
+            "the `position` is the index of the case in this very list", api,
+            "o openapi não diz que a posição é o índice do caso na fila")
 
     def test_a_fila_desempata_pelo_id(self):
         # A ordenação FINAL (o `jsonb_agg` externo) precisa usar a MESMA

@@ -44,6 +44,14 @@ class _DocumentPreviewState extends State<DocumentPreview> {
   bool _loading = true;
   bool _failed = false;
 
+  /// O MOTIVO da falha (quando ela é do download).
+  ///
+  /// A tela não diz só "não foi possível carregar": ela diz **por quê**
+  /// — rede, sessão, recusa, "o Storage não entregou" ou "o servidor
+  /// falhou". Sem isso, a operação culpa a rede quando o problema é o
+  /// login (e vice versa), e não sabe o que pedir ao parceiro.
+  String? _reason;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +66,7 @@ class _DocumentPreviewState extends State<DocumentPreview> {
     if (oldWidget.path != widget.path) {
       _bytes = null;
       _failed = false;
+      _reason = null;
       _loading = true;
       _load();
     }
@@ -68,8 +77,21 @@ class _DocumentPreviewState extends State<DocumentPreview> {
     setState(() {
       _loading = true;
       _failed = false;
+      _reason = null;
     });
-    final bytes = await widget.api.documentBytes(path);
+    Uint8List? bytes;
+    String? motivo;
+    try {
+      bytes = await widget.api.documentBytes(path);
+    } on ApiProblem catch (e) {
+      // O código do problema é o motivo: a tela traduz para a linguagem
+      // da operação (rede, sessão, recusa, "não entregou", "falhou").
+      motivo = mensagemDeFalhaDoDocumento(e.code);
+    } catch (_) {
+      // Qualquer outra falha não pode virar tela branca nem exception
+      // não tratada no meio da operação.
+      motivo = mensagemDeFalhaDoDocumento('unknown');
+    }
     if (!mounted) return;
     // O widget pode ter sido trocado (outro path) enquanto o download
     // corria: a resposta velha não pode virar a imagem da tela.
@@ -78,6 +100,10 @@ class _DocumentPreviewState extends State<DocumentPreview> {
       setState(() {
         _bytes = null;
         _failed = true;
+        _reason = motivo ??
+            (bytes == null
+                ? mensagemDeFalhaDoDocumento('unknown')
+                : 'O arquivo enviado não é uma imagem.');
         _loading = false;
       });
       return;
@@ -85,6 +111,7 @@ class _DocumentPreviewState extends State<DocumentPreview> {
     setState(() {
       _bytes = bytes;
       _failed = false;
+      _reason = null;
       _loading = false;
     });
   }
@@ -125,7 +152,7 @@ class _DocumentPreviewState extends State<DocumentPreview> {
           child: _loading
               ? SizedBox(height: 200, child: _Loading(t: t))
               : _failed
-                  ? _Failed(t: t, onRetry: _load)
+                  ? _Failed(t: t, onRetry: _load, reason: _reason)
                   : SizedBox(
                       height: 200,
                       child: Stack(
@@ -276,10 +303,14 @@ class _Loading extends StatelessWidget {
 }
 
 class _Failed extends StatelessWidget {
-  const _Failed({required this.t, required this.onRetry});
+  const _Failed({required this.t, required this.onRetry, this.reason});
 
   final ColorSchemeColorTokens t;
   final VoidCallback onRetry;
+
+  /// O motivo da falha, na linguagem da operação. Vazio = a mensagem
+  /// genérica.
+  final String? reason;
 
   @override
   Widget build(BuildContext context) {
@@ -292,7 +323,9 @@ class _Failed extends StatelessWidget {
           Icon(Icons.broken_image_outlined, size: 32, color: t.danger),
           const SizedBox(height: AppSpace.s),
           Text(
-            'Não foi possível carregar o documento.',
+            reason?.trim().isNotEmpty == true
+                ? reason!.trim()
+                : 'Não foi possível carregar o documento.',
             textAlign: TextAlign.center,
             style: AppType.label.copyWith(color: t.danger),
           ),
@@ -309,6 +342,30 @@ class _Failed extends StatelessWidget {
     );
   }
 }
+
+/// O motivo da falha do download, na linguagem da operação.
+///
+/// O download distingue o que a tela precisa distinguir: rede, sessão,
+/// recusa, arquivo que sumiu e erro do servidor. Colapsar tudo em "não
+/// foi possível carregar" faz a pessoa culpar a rede quando o problema é
+/// o login (ou o arquivo que foi apagado) — e o "tentar de novo" não
+/// resolve nenhum dos dois.
+///
+/// O texto é **perigo** (vermelho), nunca teal: teal é a cor da ação, e
+/// uma mensagem de erro não é uma ação.
+String mensagemDeFalhaDoDocumento(String code) => switch (code) {
+      'offline' => 'Sem conexão com o servidor.',
+      'unauthorized' => 'Sua sessão expirou ou não tem acesso. Entre de novo.',
+      'forbidden' => 'O servidor recusou este documento.',
+      // O Storage **mascara** a falta de permissão como "não achei o
+      // objeto" (e o registro do banco diz que ele existe): por isso a
+      // mensagem não afirma que o arquivo sumiu — ela diz o que aconteceu
+      // (o servidor não entregou).
+      'not_found' => 'O servidor registrou o arquivo, mas não o entregou.',
+      'not_configured' => 'Console sem o Storage configurado.',
+      'server_error' => 'O servidor falhou ao entregar o arquivo.',
+      _ => 'Não foi possível carregar o documento.',
+    };
 
 /// A etiqueta sobre a imagem ("toque para ampliar").
 class _Tag extends StatelessWidget {

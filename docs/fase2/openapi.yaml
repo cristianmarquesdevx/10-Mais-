@@ -1249,7 +1249,10 @@ components:
       description: >
         One case waiting for the operation's review. The list is ordered by
         the ranking key (sla_due_at, created_at, id) BEFORE the limit, so the
-        most urgent case is never dropped from the queue.
+        most urgent case is never dropped from the queue. A case with no SLA
+        (null sla_due_at) sorts LAST (NULLS LAST), and the `position` is the
+        index of the case in this very list (1 = first) — the number on the
+        screen and the order on the screen never disagree.
       required: [case_id, status]
       properties:
         case_id: { type: string, format: uuid }
@@ -1263,7 +1266,7 @@ components:
           nullable: true
           description: 'deadline of the review; null when the case has no SLA yet'
         created_at: { type: string, format: date-time }
-        position: { type: integer }
+        position: { type: integer, description: "rank in this list (1 = the next case to review); it is the index of the case in the queue (+1)" }
         documents: { type: integer }
     PartnerPreferences:
       type: object

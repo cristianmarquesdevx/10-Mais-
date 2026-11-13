@@ -17,7 +17,11 @@ const String kycStorageBucket = 'kyc-docs';
 /// Pode ser síncrono (testes de contrato) ou assíncrono (o serviço de auth
 /// renova a sessão sozinho quando o token está perto de vencer — a chamada
 /// precisa esperar por isso).
-typedef TokenProvider = FutureOr<String> Function();
+/// O provedor do token da sessão.
+///
+/// Pode devolver `null` (e **vai** devolver quando não há sessão): o
+/// console trata isso como FALHA DE CREDENCIAL, não como falta de rede.
+typedef TokenProvider = FutureOr<String?> Function();
 
 /// RFC7807 problem+json — a tela decide por [code], nunca pelo texto.
 ///
@@ -340,13 +344,31 @@ class ConsoleApi {
     return path;
   }
 
-  /// O token da sessão, com **prazo**.
+  /// O token da sessão, com **prazo** e com **erro honesto**.
   ///
   /// O provedor pode devolver o token de imediato (`FutureOr`), mas a
   /// sessão também pode precisar **renovar** o token (uma ida ao servidor
   /// que, se travar, trava a tela junto). O prazo cobre essa espera.
-  Future<String> _token(Duration limit) =>
-      Future<String>.sync(() => accessToken()).timeout(limit);
+  ///
+  /// Três falhas, três códigos diferentes — a tela precisa saber qual é:
+  ///
+  ///   * o token **não chega** (o prazo estoura) → `offline`;
+  ///   * o token **não existe** (sessão ausente) → `unauthorized`;
+  ///   * o provedor **lança** um `ApiProblem` → repassado como está.
+  ///
+  /// Sem o segundo item, um provedor que devolvesse `null` estourava um
+  /// `TypeError` dentro do `catch` genérico e virava `'offline'` — a
+  /// operação culparia a rede por uma sessão que já tinha acabado, e o
+  /// botão "tentar de novo" nunca resolveria.
+  Future<String> _token(Duration limit) async {
+    final token =
+        await Future<String?>.sync(() => accessToken()).timeout(limit);
+    if (token == null || token.trim().isEmpty) {
+      throw ApiProblem(401, 'unauthorized',
+          'Sem sessão: entre no console de novo.', '');
+    }
+    return token;
+  }
 
   Future<Map<String, dynamic>> _req(
     String method,
@@ -426,13 +448,24 @@ class ConsoleApi {
   /// não há service role no caminho do produto, nem URL assinada para
   /// compartilhar (uma URL assinada vazaria o documento).
   ///
-  /// Devolve `null` quando não há documento, quando o servidor recusa ou
-  /// quando a rede falha: a tela mostra o estado de erro, nunca uma imagem
-  /// inventada.
-  Future<Uint8List?> documentBytes(String storagePath) async {
+  /// O motivo da falha é **discriminado**: rede (`offline`), sessão
+  /// (`unauthorized`), recusa (`forbidden`), objeto que o Storage não
+  /// entregou (`not_found`) e erro do servidor (`server_error`) chegam
+  /// com códigos diferentes. Antes, tudo virava `null` e a tela dizia
+  /// sempre "Não foi possível carregar o documento" — indistinguível de
+  /// rede caída, sessão morta e arquivo apagado. A operação precisa
+  /// saber qual dos três é: só um deles se resolve com "tentar de novo".
+  Future<Uint8List> documentBytes(String storagePath) async {
     final root = storageRoot;
     final path = storagePath.trim();
-    if (root.isEmpty || path.isEmpty) return null;
+    if (root.isEmpty) {
+      throw ApiProblem(0, 'not_configured',
+          'Console sem Storage: configure STORAGE_BASE no build.', '');
+    }
+    if (path.isEmpty) {
+      throw ApiProblem(404, 'not_found',
+          'Este documento não tem arquivo no bucket.', '');
+    }
     final encoded = path
         .split('/')
         .where((p) => p.isNotEmpty)
@@ -451,11 +484,73 @@ class ConsoleApi {
       // o `send` já esperaria para sempre.
       final streamed = await _http.send(req).timeout(downloadTimeout);
       final resp = await http.Response.fromStream(streamed).timeout(downloadTimeout);
-      if (resp.statusCode >= 400) return null;
+      if (resp.statusCode >= 400) throw _problemaDoStorage(resp);
       return resp.bodyBytes;
-    } catch (_) {
-      return null;
+    } on ApiProblem {
+      // O código do problema (credencial, recusa, arquivo ausente) é o
+      // que a tela mostra: mascará-lo como 'offline' faria a operação
+      // culpar a rede pelo motivo errado.
+      rethrow;
+    } on TimeoutException {
+      throw ApiProblem(0, 'offline', 'O download não respondeu a tempo.', '');
+    } catch (e) {
+      throw ApiProblem(0, 'offline', 'Sem conexão com o servidor do Storage.',
+          '$e');
     }
+  }
+
+  /// O erro do Storage, traduzido para um código que a tela entende.
+  ///
+  /// MEDIDO no stack local: o Storage responde **HTTP 400/500** e escreve
+  /// o motivo no CORPO (o status HTTP, sozinho, não diz nada):
+  ///
+  ///   * objeto inexistente →
+  ///     `{"statusCode":"404","error":"not_found","code":"NoSuchKey"}`;
+  ///   * credencial que não enxerga o bucket (token inválido/expirado ou
+  ///     papel sem acesso) →
+  ///     `{"statusCode":"404","error":"Bucket not found","code":"NoSuchBucket"}`;
+  ///   * registro no banco **sem** objeto no storage →
+  ///     `{"statusCode":"500","code":"InternalError"}` (a instância do
+  ///     servidor falhou — não é "o arquivo sumiu");
+  ///   * sem permissão no objeto → o Storage **MASCARA** como `NoSuchKey`
+  ///     (não entrega se o objeto existe).
+  ///
+  /// Por isso o código olha o CORPO, não só o status: classificar pelo
+  /// status chamaria "arquivo apagado" o que é, na verdade, "a sua
+  /// credencial não viu o bucket" — e as duas coisas pedem ações
+  /// diferentes da operação.
+  ApiProblem _problemaDoStorage(http.Response resp) {
+    String? codigo;
+    int? status;
+    try {
+      final j = jsonDecode(resp.body);
+      if (j is Map<String, dynamic>) {
+        codigo = j['code'] as String?;
+        status = (j['statusCode'] as num?)?.toInt();
+      }
+    } catch (_) {
+      // O corpo não é JSON: o status HTTP serve.
+    }
+    if (codigo == 'NoSuchBucket') {
+      return ApiProblem(401, 'unauthorized',
+          'O servidor não reconheceu a credencial deste console.', '');
+    }
+    if (codigo == 'NoSuchKey' || status == 404 || resp.statusCode == 404) {
+      // O texto NÃO afirma que o arquivo sumiu: o Storage mascara a
+      // falta de permissão como "não achei o objeto".
+      return ApiProblem(404, 'not_found',
+          'O servidor registrou o arquivo, mas não o entregou.', '');
+    }
+    if (resp.statusCode == 401 || status == 401) {
+      return ApiProblem(401, 'unauthorized',
+          'A sessão expirou: entre de novo.', '');
+    }
+    if (resp.statusCode == 403 || status == 403) {
+      return ApiProblem(403, 'forbidden', 'O servidor recusou este documento.',
+          '');
+    }
+    return ApiProblem(resp.statusCode, 'server_error',
+        'O servidor falhou ao entregar o arquivo (${resp.statusCode}).', '');
   }
 
   /// A decisão da operação.

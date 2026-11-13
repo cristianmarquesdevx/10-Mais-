@@ -432,11 +432,16 @@ BEGIN
 
   -- E um caminho VAZIO (legado) é OMITIDO — nunca `null`.
   --
-  -- O detalhe é montado com `jsonb_strip_nulls`, mas o `strip_nulls` do
-  -- TOPO não desce dentro do array `documents`: sem o strip interno, um
-  -- `storage_path` vazio (o `NULLIF` o transforma em `null`) chegaria
-  -- como `"storage_path": null` — um campo que o openapi promete NUNCA
+  -- O detalhe é montado com `jsonb_strip_nulls`, e ele **recursa**: a
+  -- chave nula dentro de um elemento do array `documents` também some
+  -- (medido no PG 16.4 do CI e no 17.11 do stack local: `{"docs":
+  -- [{"p": null}]}` → `{"docs": [{}]}`). Sem isso, um `storage_path`
+  -- vazio (o `NULLIF` o transforma em `null`) chegaria como
+  -- `"storage_path": null` — um campo que o openapi promete NUNCA
   -- existir (nulo é OMITIDO, em toda parte).
+  --
+  -- Este assert existe para **vigiar** esse comportamento: se uma versão
+  -- do Postgres deixar de recursar, ele acusa (e o contrato quebra).
   INSERT INTO kyc_documents (case_id, doc_type, storage_path)
   VALUES (v_case, 'PROOF_ADDRESS', '');
   SELECT d INTO v_doc
@@ -641,6 +646,14 @@ BEGIN
   END IF;
 
   -- O desempate: dois casos com o MESMO (prazo, entrada) vêm pelo `id`.
+  --
+  -- O QUE este assert prova: a ordem **EFETIVA** dos empates na tela
+  -- (que é o que a operação vê). O que ele NÃO prova: o `ORDER BY`
+  -- externo (`q.sla_due_at, q.created_at, q.case_id`) — ele é o
+  -- ESPELHO da chave do ranking (o subquery já entrega nessa ordem),
+  -- então tirá-lo não muda o resultado. Quem guarda essa linha é o
+  -- `test_contract.py` (grep textual), porque o comportamento é
+  -- indistinguível do subquery.
   SELECT array_agg(c->>'case_id' ORDER BY ord) INTO v_ordem
     FROM jsonb_array_elements(v_fila->'cases') WITH ORDINALITY AS x(c, ord)
    WHERE c->>'case_id' IN ('11111111-1111-4111-8111-1111111111aa',
@@ -662,6 +675,89 @@ CREATE INDEX IF NOT EXISTS idx_kyc_queue ON kyc_cases (sla_due_at)
 SQL
 then
   fail "a fila não traz o caso mais urgente quando há mais casos que o limite (ver o erro acima)"
+fi
+
+# 14) A POSIÇÃO concorda com a ORDEM (o número da tela é o número da tela).
+#
+#     O defeito: `fn_kyc_queue_position` contava com comparação de LINHA
+#     (`(q.sla_due_at, q.created_at, q.id) <= (...)`), e na comparação de
+#     linha um NULL torna o resultado **desconhecido** (o `WHERE`
+#     descartava a linha) — não "NULL é o maior", como no `ORDER BY`.
+#     Um caso SEM prazo recebia posição **0** sendo o ÚLTIMO da fila: a
+#     tela mostrava "#1" em cima de "#0" (dois números que não contam
+#     nada). A migration `20261113001000` alinha a posição com a ordem.
+#
+#     O assert é o INVARIANTE INTEIRO: para todo caso da fila, a
+#     `position` que o servidor devolve tem que ser o índice dele na
+#     própria fila (+1). É mais forte que testar um caso só — e pega
+#     qualquer desalinhamento, não só o do prazo nulo.
+if ! psql_c -At <<'SQL'
+INSERT INTO users (id, phone_e164, role)
+VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '+5596990000066', 'PARTNER')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO partners (user_id, city_id)
+VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        '99999999-9999-4999-8999-999999999999')
+ON CONFLICT (user_id) DO NOTHING;
+SET app.test_uid = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+-- Um caso COM prazo e um SEM prazo (o `sla_due_at` é NULL).
+INSERT INTO kyc_cases (partner_user_id, status, sla_due_at, created_at)
+VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'IN_REVIEW',
+        now() + interval '2 hours', now());
+INSERT INTO kyc_cases (partner_user_id, status, sla_due_at, created_at)
+VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'IN_REVIEW',
+        NULL, now() + interval '1 minute');
+
+DO $test$
+DECLARE
+  v_fila jsonb;
+  v_bad  text;
+  v_sem  jsonb;
+  v_com  jsonb;
+  v_total int;
+BEGIN
+  v_fila := api_kyc_queue(200);
+  SELECT count(*) INTO v_total
+    FROM jsonb_array_elements(v_fila->'cases');
+
+  -- O invariante: a posição é o índice na fila (+1).
+  SELECT string_agg(
+           format('%s: posição %s (era %s)', c->>'case_id', c->>'position', ord),
+           ', ')
+    INTO v_bad
+    FROM jsonb_array_elements(v_fila->'cases') WITH ORDINALITY AS x(c, ord)
+   WHERE (c->>'position')::int <> ord;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'a posição não bate com a ordem da fila: %', left(v_bad, 400);
+  END IF;
+
+  -- E o caso SEM prazo é o ÚLTIMO da fila (os NULLs vão por último),
+  -- depois do caso COM prazo do mesmo parceiro.
+  SELECT c INTO v_sem
+    FROM jsonb_array_elements(v_fila->'cases') c
+   WHERE c->>'partner_user_id' = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+     AND c->>'sla_due_at' IS NULL;
+  SELECT c INTO v_com
+    FROM jsonb_array_elements(v_fila->'cases') c
+   WHERE c->>'partner_user_id' = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+     AND c->>'sla_due_at' IS NOT NULL;
+  IF v_sem IS NULL OR v_com IS NULL THEN
+    RAISE EXCEPTION 'os casos de prazo e sem prazo não apareceram na fila (% casos)',
+      v_total;
+  END IF;
+  IF (v_sem->>'position')::int <> v_total THEN
+    RAISE EXCEPTION 'o caso sem prazo deveria ser o ÚLTIMO da fila (posição %), veio %',
+      v_total, v_sem->>'position';
+  END IF;
+  IF (v_com->>'position')::int >= (v_sem->>'position')::int THEN
+    RAISE EXCEPTION 'o caso COM prazo deveria vir antes do sem prazo: % e %',
+      v_com->>'position', v_sem->>'position';
+  END IF;
+END
+$test$;
+SQL
+then
+  fail "a posição do caso na fila não concorda com a ordem da fila (ver o erro acima)"
 fi
 
 say "TODOS OS ASSERTS OK — cadeia de deploy aplicou do zero ($count migrations)"

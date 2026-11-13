@@ -286,6 +286,42 @@ void main() {
             .having((e) => e.code, 'code', 'unauthorized')),
       );
     });
+
+    test('token AUSENTE (sessão morta) é erro de CREDENCIAL, não "offline"',
+        () async {
+      // O provedor devolve `null` quando não há sessão (é o que o
+      // `ten_auth` faz). Sem o guarda, isso estourava um `TypeError`
+      // dentro do `catch` genérico e virava 'offline' — a operação
+      // culparia a rede por uma sessão que já tinha acabado, e o botão
+      // "tentar de novo" nunca resolveria.
+      final api = ConsoleApi(
+        baseUrl: 'http://host:54321/functions/v1/kyc',
+        accessToken: () async => null,
+        inner: MockClient((_) async => http.Response('{}', 200)),
+      );
+
+      await expectLater(
+        api.queue(),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'unauthorized')),
+      );
+    });
+
+    test('token VAZIO é erro de CREDENCIAL, não "offline"', () async {
+      // O console sem sessão e sem token de build entrega uma string
+      // vazia: continua sendo falta de credencial, não falta de rede.
+      final api = ConsoleApi(
+        baseUrl: 'http://host:54321/functions/v1/kyc',
+        accessToken: () async => '   ',
+        inner: MockClient((_) async => http.Response('{}', 200)),
+      );
+
+      await expectLater(
+        api.queue(),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'unauthorized')),
+      );
+    });
   });
 
   group('identidade do parceiro', () {
@@ -432,19 +468,28 @@ void main() {
       expect(url, startsWith('http://outro:54321/storage/v1/object/kyc-docs/'));
     });
 
-    test('o servidor recusa o download: devolve null, não bytes', () async {
+    test('o servidor recusa o download: diz o motivo, não bytes', () async {
       final api = apiCom(MockClient((_) async => http.Response('{}', 403)));
 
-      expect(await api.documentBytes('kyc/u/c-1/CNH_1.jpg'), isNull);
+      await expectLater(
+        api.documentBytes('kyc/u/c-1/CNH_1.jpg'),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'forbidden')),
+      );
     });
 
-    test('sem rede: null (a tela mostra o estado de erro)', () async {
+    test('sem rede: o erro é "offline" (a tela mostra o estado de erro)',
+        () async {
       final api = apiCom(MockClient((_) async => throw Exception('sem rede')));
 
-      expect(await api.documentBytes('kyc/u/c-1/CNH_1.jpg'), isNull);
+      await expectLater(
+        api.documentBytes('kyc/u/c-1/CNH_1.jpg'),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'offline')),
+      );
     });
 
-    test('servidor mudo no download: null em vez de travar para sempre',
+    test('servidor mudo no download: "offline" em vez de travar para sempre',
         () async {
       // O download tem prazo próprio: sem ele, o preview ficava pendurado
       // para sempre (sem botão de recuperar, porque o `finally` nunca
@@ -459,10 +504,14 @@ void main() {
         }),
       );
 
-      expect(await api.documentBytes('kyc/u/c-1/CNH_1.jpg'), isNull);
+      await expectLater(
+        api.documentBytes('kyc/u/c-1/CNH_1.jpg'),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'offline')),
+      );
     });
 
-    test('token que nunca chega no download: null (não trava)', () async {
+    test('token que nunca chega no download: "offline" (não trava)', () async {
       final api = ConsoleApi(
         baseUrl: 'http://host:54321/functions/v1/kyc',
         accessToken: () async {
@@ -473,7 +522,94 @@ void main() {
         inner: MockClient((_) async => http.Response.bytes([0xFF], 200)),
       );
 
-      expect(await api.documentBytes('kyc/u/c-1/CNH_1.jpg'), isNull);
+      await expectLater(
+        api.documentBytes('kyc/u/c-1/CNH_1.jpg'),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'offline')),
+      );
+    });
+
+    test('o objeto que NÃO está no bucket: "not_found" (não "sem rede")',
+        () async {
+      // MEDIDO no stack local: o Storage responde **HTTP 400** e escreve o
+      // motivo no corpo (`{"statusCode":"404","code":"NoSuchKey"}`). Se o
+      // console classificasse pelo status HTTP, a operação leria "erro do
+      // servidor" num arquivo que simplesmente não existe mais.
+      final api = apiCom(MockClient((_) async => http.Response(
+            jsonEncode({
+              'statusCode': '404',
+              'error': 'not_found',
+              'message': 'Object not found',
+              'code': 'NoSuchKey',
+            }),
+            400,
+          )));
+
+      await expectLater(
+        api.documentBytes('kyc/u/c-1/CNH_1.jpg'),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'not_found')),
+      );
+    });
+
+    test('credencial que não enxerga o bucket: "unauthorized" (não "sem rede")',
+        () async {
+      // MEDIDO: com um token inválido/expirado, o Storage responde
+      // `{"code":"NoSuchBucket"}` — a credencial não chegou ao bucket.
+      // Chamar isso de "arquivo apagado" mandaria a operação pedir um
+      // documento novo que já está lá.
+      final api = apiCom(MockClient((_) async => http.Response(
+            jsonEncode({
+              'statusCode': '404',
+              'error': 'Bucket not found',
+              'message': 'Bucket not found',
+              'code': 'NoSuchBucket',
+            }),
+            400,
+          )));
+
+      await expectLater(
+        api.documentBytes('kyc/u/c-1/CNH_1.jpg'),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'unauthorized')),
+      );
+    });
+
+    test('o Storage com erro interno (500): "server_error"', () async {
+      // MEDIDO: quando o registro do banco existe mas o objeto não está
+      // no MinIO, o Storage responde `{"code":"InternalError"}` com HTTP
+      // 500 — é a INSTÂNCIA do servidor, não "o arquivo sumiu".
+      final api = apiCom(MockClient((_) async => http.Response(
+            jsonEncode({
+              'statusCode': '500',
+              'error': 'Internal',
+              'message': 'Internal Server Error',
+              'code': 'InternalError',
+            }),
+            500,
+          )));
+
+      await expectLater(
+        api.documentBytes('kyc/u/c-1/CNH_1.jpg'),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'server_error')),
+      );
+    });
+
+    test('o Storage sem o bucket configurado: "not_configured"', () async {
+      // Sem `KYC_BASE` (e sem `STORAGE_BASE`), o console não tem onde
+      // buscar o documento: isso é configuração do build, não rede.
+      final api = ConsoleApi(
+        baseUrl: '',
+        accessToken: () async => 'jwt',
+        inner: MockClient((_) async => http.Response.bytes([0xFF], 200)),
+      );
+
+      await expectLater(
+        api.documentBytes('kyc/u/c-1/CNH_1.jpg'),
+        throwsA(isA<ApiProblem>()
+            .having((e) => e.code, 'code', 'not_configured')),
+      );
     });
   });
 

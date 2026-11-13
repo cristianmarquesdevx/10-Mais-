@@ -267,6 +267,22 @@ Fase 3). Ele é um app Flutter mobile (Android/iOS), não uma página web.
   3G lento leva mais que 20 s — cortar isso seria trocar "demorou" por
   "não foi possível carregar o documento". Ainda assim tem prazo: sem ele
   o preview ficaria pendurado para sempre, sem botão de recuperar.
+  O download **diz o motivo** da falha, e o motivo é **discriminado**:
+  `offline` (rede ou prazo), `unauthorized` (sessão morta / credencial que
+  não enxerga o bucket), `forbidden` (recusa), `not_found` (o Storage não
+  devolveu o objeto) e `server_error` (a instância do servidor falhou). A
+  tela mostra o motivo correspondente — "Não foi possível carregar o
+  documento" servia para tudo e não dizia nada: a operação culparia a rede
+  quando o problema era o login, e pediria um documento novo que já
+  estava lá. O **Storage responde HTTP 400/500** e escreve o motivo no
+  **corpo** (`{"statusCode":"404","code":"NoSuchKey"}`,
+  `{"code":"NoSuchBucket"}`, `{"code":"InternalError"}`), então a
+  classificação olha o corpo, não só o status HTTP — e o texto **não
+  afirma** que o arquivo sumiu quando o Storage pode estar **mascarando**
+  uma falta de permissão como "não achei o objeto".
+  **Credencial ≠ rede**: um token ausente (sessão morta) é `unauthorized`,
+  nunca `offline`. O botão "tentar de novo" resolve rede; não resolve
+  login — a tela precisa dizer a coisa certa.
   O servidor ordena a fila por `(sla_due_at, created_at, id)` **antes** do
   `LIMIT`: com `LIMIT` sem `ORDER BY`, o Postgres devolvia 50 casos
   arbitrários e o caso que vence primeiro podia não aparecer — esconder
@@ -275,6 +291,14 @@ Fase 3). Ele é um app Flutter mobile (Android/iOS), não uma página web.
   lugar), e o teste é **independente do plano**: sem derrubar o índice
   parcial e forçar o seq scan, o `LIMIT` sem `ORDER BY` passaria por
   acidente (o índice já devolve as linhas ordenadas).
+  A **posição** que a tela mostra é a **posição na ordem** — o número e a
+  ordem nunca discordam. Um caso **sem prazo** (`sla_due_at` nulo) é o
+  **último** da fila (no `ORDER BY` ascendente o NULL vai por último), e a
+  posição antigo contava com comparação de LINHA, onde um NULL torna o
+  resultado **desconhecido** (≠ "NULL é o maior" do `ORDER BY`): o caso
+  sem prazo recebia **posição 0** sendo o último — a tela mostrava "#1" em
+  cima de "#0". O CI prova o **invariante inteiro**: a `position` de cada
+  caso da fila é o índice dele na fila + 1.
 - **Detalhe** (`GET /kyc/cases/{caseId}`): a **identidade** do parceiro (nome,
   telefone e conta), a documentação com a marca de **arquivo pendente**
   (documento registrado sem arquivo) e a decisão (aprovar, recusar ou pedir

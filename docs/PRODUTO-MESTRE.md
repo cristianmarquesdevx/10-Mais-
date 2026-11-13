@@ -531,6 +531,68 @@ file: …\app.dill"*. A solução é compilar numa **cópia ASCII** do projeto
 (`%TEMP%\opencode\10e_build`); o código Flutter em si está correto (os
 mesmos testes passam no checkout original).
 
+### 8l. Rodada "os 6 furos da 4ª verificação + a posição que não era a ordem" (13/11/2026)
+
+A **quarta** verificação adversarial do commit `74aa4ff` voltou a dar
+**VERIFIED WITH CAVEATS** — e o veredito foi o mais honesto de todos:
+**14 de 14 mutações** que deveriam falhar **falharam** (os claims de
+comportamento estão realmente fechados), mas a **camada de prova** tinha
+**6 furos**: 1 assert comportamental **inerte**, 2 guards vivos **só
+textualmente**, 1 guard com **falso-negativo e falso-positivo**
+comprovados, 1 **comentário factualmente falso** (dentro do meu próprio
+commit) e 2 **riscos novos** que ninguém tinha visto. Todos corrigidos
+aqui.
+
+| Achado | O que era | O que é agora |
+|---|---|---|
+| **F1 — o assert de empate do CI era INERTE** (🟡) | A seção 13 do CI exigia que dois casos com o mesmo (prazo, entrada) viessem pelo `id` — mas o **subquery já entregava** os empates ordenados pelo `id`, então o `ORDER BY` externo é um **espelho** (tirá-lo não muda nada): o assert passava 3/3 mesmo sem o desempate | O comentário do CI agora diz a verdade: o assert prova a **ordem efetiva** dos empates (o que a operação vê), e quem guarda a linha do `ORDER BY` externo é o **grep textual** do contrato, porque o comportamento é **indistinguível** do subquery. Um guard que finge provar o que não prova é pior que nenhum |
+| **F2 — o guard "independente do plano" era satisfeito por código comentado** (🟡) | `assertIn("enable_indexscan = off", ci)` aceita `# SET enable_indexscan = off;` — comentar a neutralização mantinha o contrato **verde** (o mesmo defeito que o F2 da rodada anterior corrigiu, agora no guard) | O regex **ancora no início da linha** (`(?m)^\s*SET enable_indexscan = off;\s*$`): um comentário começa com `#` e não casa. **Provado por mutação**: comentando a linha → o contrato **falha** |
+| **F3 — o guard do openapi tinha falso-negativo E falso-positivo** (🔴) | O slice `api[api.index("    KycCase:"):api.index("    KycQueueItem:")]` engolia qualquer schema que caísse no meio (um schema novo, legitimamente anulável, faria o assert rejeitar um contrato **correto**), e o `assertNotIn("nullable: true")` deixava passar `nullable:  true` (dois espaços) | O bloco do schema é agora encontrado pelo **helper `bloco_do_schema`** (do nome até o **próximo** schema, não um nome escolhido) e o `nullable` é casado por **regex** (`\bnullable\s*:\s*true\b`). **Provado por mutação**: `nullable:  true` → o contrato **falha** |
+| **F4 — dois testes do contrato ERRAM em vez de FALHAR** (🟡) | `fila.index(...)` e `api.index(...)` levantavam `ValueError` (erro de teste, não falha de asserção) quando a string sumia — o teste "falha" por um motivo diferente do que afirma | Cada `index()` agora tem um `assertIn` antes: o teste falha **com a mensagem que explica o defeito** |
+| **F5 — um comentário factualmente FALSO no meu commit** (🔴) | O `ci_migrations.sh` afirmava que o `jsonb_strip_nulls` do topo *"não desce dentro do array `documents`"* — **falso**: ele **recursa** (medido no PG 16.4 do CI e no 17.11 do stack local: `{"docs":[{"p":null}]}` → `{"docs":[{}]}`). O comentário contradizia a mensagem do próprio commit | O comentário foi corrigido (o `strip_nulls` **recursa** — e é por isso que o `null` já era omitido) e o **guard** do CI foi mantido: se uma versão do Postgres deixar de recursar, o assert acusa |
+| **E1 — token ausente virava "offline"** (🔴) | Um provedor de token que devolvesse `null` (é o que o `ten_auth` faz sem sessão) estourava um `TypeError` dentro do `catch` genérico e virava `'offline'`: a operação culparia a **rede** por uma sessão morta — e o botão "tentar de novo" nunca resolveria | `ConsoleApi._token` trata token **ausente** e **vazio** como `unauthorized` ("sem sessão"), e o `main.dart` **diz** isso explicitamente em vez de devolver uma string vazia. **Provado por mutação**: tirando o guarda → o token ausente vira `offline` e o token vazio **sai com a requisição** (o teste falha) |
+| **E3 — o download colapsava 403/404/prazo/credencial** (🔴) | `documentBytes` devolvia `null` para tudo: a tela dizia sempre "Não foi possível carregar o documento" — indistinguível de rede caída, sessão morta e arquivo apagado | O download agora **discrimina** o motivo (`offline`, `unauthorized`, `forbidden`, `not_found`, `server_error`, `not_configured`) e a tela mostra **qual** foi, sempre com o botão "Tentar de novo". **Medido no stack local**: o Storage responde **HTTP 400/500** e escreve o motivo no **corpo** (`{"statusCode":"404","code":"NoSuchKey"}` = o Storage não devolveu; `{"code":"NoSuchBucket"}` = a credencial não enxerga o bucket; `{"code":"InternalError"}` = registro no banco sem objeto no MinIO) — por isso a classificação olha o **corpo**, não o status HTTP, e o texto **não afirma** que o arquivo sumiu (o Storage **mascara** falta de permissão como "não achei") |
+| **P1 — a POSIÇÃO não era a ORDEM** (🔴) | `fn_kyc_queue_position` contava com comparação de **LINHA** (`(q.sla_due_at, q.created_at, q.id) <= (...)`), e numa comparação de linha um NULL torna o resultado **desconhecido** (≠ "NULL é o maior" do `ORDER BY`): um caso **sem prazo** recebia **posição 0** sendo o **último** da fila. A tela mostrava **"#1" em cima de "#0"** — dois números que não contam nada | A migration `20261113001000` alinha a posição com a **mesma semântica** do `ORDER BY` (NULLS LAST, desempate por entrada e id). O CI prova o **invariante inteiro**: a `position` de **cada** caso da fila é o índice dele na fila + 1. **Provado por mutação**: voltando à função antiga → o CI falha com *"a posição não bate com a ordem da fila: … posição 0 (era 87)"* |
+
+**Mutações executadas nesta rodada (cada uma foi pega):** a função de
+posição antiga · a neutralização do plano **comentada** · `nullable:  true`
+com dois espaços · o guarda de credencial removido · a discriminação do
+Storage removida · a tela ignorando o motivo · a promessa do openapi
+sobre a posição ("the `position` **is** the index" → "**IS NOT** the
+index": o contrato passa a falhar, porque o contrato não pode dizer uma
+coisa e o servidor fazer outra). **7 de 7 mordidas**.
+
+**O que a rodada mudou (de verdade):**
+
+| Artefato | Conteúdo |
+|---|---|
+| `supabase/migrations/20261113001000_kyc_queue_position_null.sql` | **nova**: a posição passa a contar com a mesma semântica da ordem (NULLS LAST) |
+| `scripts/ci_migrations.sh` | seção **14**: o invariante inteiro (posição == índice + 1) para toda a fila; o comentário do `strip_nulls` corrigido; o comentário do desempate honesto |
+| `scripts/test_contract.py` | **40/40**: o guard do plano **ancorado** (código comentado não passa), o `nullable` por **regex**, o bloco do schema por **helper** (sem falso-positivo), `assertIn` antes de cada `index()`, e o teste novo da posição |
+| `app/console/lib/src/api/console_api.dart` | `_token` distingue credencial de rede; `documentBytes` **discrimina o motivo** (`_problemaDoStorage`, com o mapeamento do Storage medido) |
+| `app/console/lib/src/widgets/document_preview.dart` | a tela mostra **o motivo** da falha (e o motivo é sempre **vermelho**, nunca teal — teal é a cor da ação) |
+| `app/console/lib/main.dart` | token ausente = `unauthorized` explícito, não string vazia |
+
+**Verificação desta rodada:** console **62/62** (era 56) com `dart analyze`
+limpo; passageiro 90/90; parceiro 139/139; `ten_auth` 18/18; `ten_design`
+analyze limpo; `test_contract.py` **40/40**; `ci_migrations.sh` aplica **26
+migrations do zero** → "TODOS OS ASSERTS OK"; `kyc_smoke.py` **PASS**; os
+**APKs debug e release buildam a partir de uma cópia ASCII do projeto**
+(o caminho canônico `10é+` quebra o AOT do Gradle no Windows — bloqueio de
+**ambiente**, não de produto; release inspecionado: `uses-permission:
+name='android.permission.INTERNET'`); e o fluxo completo foi provado **no
+emulador** com o build final (fila → documento na tela → "SEM ARQUIVO" em
+vermelho no path sem objeto → folha de decisão → aprovação, com a fila
+esvaziada e o `partners.kyc_status = APPROVED`).
+
+**Lição que continua valendo:** *um assert que passa com o defeito
+presente é pior que assert nenhum* — e um assert **textual** é ainda mais
+frágil que um comportamental: ele passa com o código comentado, com a
+formatação trocada e com o defeito ao lado. A regra que sobrou: **todo
+guard novo é ancorado (regex que não casa comentário), todo guard
+comportamental é independente do plano, e todo guard passa por uma
+mutação antes de ser declarado fechado.**
+
 ## 9. Pendências externas (bloqueios de lançamento)
 
 1. **Advogado (trabalhista/regulatório):** contrato do passe × Tema 1.291; neutrality documentada; Lei 13.640 não cobre entregas.

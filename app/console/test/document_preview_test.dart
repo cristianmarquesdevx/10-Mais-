@@ -46,6 +46,14 @@ void main() {
         }),
       );
 
+  /// Um Storage que recusa TODO download com um status e um corpo — para
+  /// a tela mostrar o MOTIVO certo (e não um genérico).
+  ConsoleApi apiQueDevolveStatus(int status, String body) => ConsoleApi(
+        baseUrl: 'http://host/functions/v1/kyc',
+        accessToken: () async => 'jwt',
+        inner: MockClient((_) async => http.Response(body, status)),
+      );
+
   Widget monta(Widget child) => MaterialApp(
         theme: buildLightTheme(),
         home: Scaffold(body: child),
@@ -84,8 +92,46 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Não foi possível carregar o documento.'), findsOneWidget);
+    // O motivo é o do servidor (404 = o Storage não devolveu o objeto), e
+    // a tela o diz — não o genérico "não foi possível carregar".
+    expect(find.text('O servidor registrou o arquivo, mas não o entregou.'),
+        findsOneWidget);
     expect(find.byType(Image), findsNothing);
+    expect(find.byKey(const ValueKey('document-retry')), findsOneWidget);
+  });
+
+  testWidgets('a tela diz o MOTIVO (não um genérico que serve para tudo)',
+      (tester) async {
+    // A operação precisa distinguir "o servidor recusou" (problema do
+    // servidor/da permissão) de "a rede caiu" e de "a sessão morreu": o
+    // botão "tentar de novo" resolve um deles, não os outros.
+    final api = apiQueDevolveStatus(403, '{}');
+
+    await tester.pumpWidget(
+      monta(DocumentPreview(api: api, path: 'a.png', label: 'CNH')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('O servidor recusou este documento.'), findsOneWidget);
+    expect(find.text('Não foi possível carregar o documento.'), findsNothing);
+    expect(find.byKey(const ValueKey('document-retry')), findsOneWidget);
+  });
+
+  testWidgets('erro do servidor: a tela diz que o servidor falhou',
+      (tester) async {
+    // O Storage respondeu 500 (`InternalError`): a instância do servidor
+    // falhou. A tela não pode dizer "o arquivo sumiu" (não é verdade) nem
+    // "sem conexão" (a rede está boa) — ela diz o que aconteceu.
+    final api = apiQueDevolveStatus(500,
+        '{"statusCode":"500","error":"Internal","code":"InternalError"}');
+
+    await tester.pumpWidget(
+      monta(DocumentPreview(api: api, path: 'a.png', label: 'CNH')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('O servidor falhou ao entregar o arquivo.'),
+        findsOneWidget);
     expect(find.byKey(const ValueKey('document-retry')), findsOneWidget);
   });
 
@@ -99,7 +145,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Não foi possível carregar o documento.'), findsOneWidget);
+    expect(find.text('O arquivo enviado não é uma imagem.'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
   });
 

@@ -65,7 +65,16 @@ class _ConsoleAppState extends State<ConsoleApp> {
       storageBase: storageBase.isEmpty ? null : storageBase,
       accessToken: () async {
         final session = await _auth?.accessToken();
-        return session ?? buildToken;
+        final token = session ?? buildToken;
+        if (token.trim().isEmpty) {
+          // SEM SESSÃO é falha de CREDENCIAL, não de rede: a tela precisa
+          // pedir o login ("entre de novo"), não culpar a conexão. E o
+          // botão "tentar de novo" não resolve um login ausente — por
+          // isso o erro sai daqui, com o código certo.
+          throw ApiProblem(401, 'unauthorized',
+              'Sem sessão: entre no console de novo.', '');
+        }
+        return token;
       },
     );
     _controller = ConsoleController(_api);

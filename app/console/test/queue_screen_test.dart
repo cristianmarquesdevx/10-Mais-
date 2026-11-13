@@ -266,7 +266,7 @@ void main() {
       // privado (o teste responde com um corpo que não é imagem, e a tela
       // mostra a falha em vez de fingir que carregou).
       expect(find.byKey(const ValueKey('document-preview')), findsOneWidget);
-      expect(find.text('Não foi possível carregar o documento.'), findsOneWidget);
+      expect(find.text('O arquivo enviado não é uma imagem.'), findsOneWidget);
     });
 
     testWidgets('o detalhe não estoura em 360x800 com a fonte em 2.0',
